@@ -1,0 +1,3 @@
+"""
+OCR Components for PyRedactor
+"""

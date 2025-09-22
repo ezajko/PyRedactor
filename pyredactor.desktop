@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=PyRedactor
+GenericName=PDF Redaction
+Comment=PDF file redaction and OCR
+Exec=pyredactor %f
+Icon=pyredactor
+Terminal=false
+Type=Application
+MimeType=application/pdf;
+Categories=Viewer;Graphics;
