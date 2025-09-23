@@ -55,6 +55,7 @@ class HandleItem(QGraphicsRectItem):
                 new_rect.setBottomRight(new_rect.bottomRight() + delta)
             parent.setRect(new_rect)
             parent.update_handles()
+            parent.update()
             event.accept()
 
     def mouseReleaseEvent(self, event):
@@ -62,6 +63,8 @@ class HandleItem(QGraphicsRectItem):
             parent = self.parentItem()
             if hasattr(parent, "update_data_model_from_rect"):
                 parent.update_data_model_from_rect()
+                parent.update_handles()
+                parent.update()
             event.accept()
 
 
@@ -102,57 +105,43 @@ class ResizableRectItem(QGraphicsRectItem):
             # Always keep marker selectable
             self.setFlag(QGraphicsRectItem.ItemIsSelectable, True)
             self.update_handles()
+        elif change == QGraphicsRectItem.ItemPositionHasChanged:
+            # Sync position to data model after move
+            self.update_data_model_from_rect()
+            self.update_handles()
         return super().itemChange(change, value)
 
     def setRect(self, rect):
         super().setRect(rect)
         self.update_handles()
+        self.update_data_model_from_rect()
+        self.update()
+        self.update_data_model_from_rect()
 
-    def update_data_model_from_rect(self):
-        main_window = self.scene().views()[0].window()
-        if main_window and hasattr(main_window, 'document_service'):
-            document = main_window.document_service.get_current_document()
-            if document:
-                page = document.get_current_page()
-                if page:
-                    rect = self.rect()
-                    start_point = (rect.topLeft().x(), rect.topLeft().y())
-                    end_point = (rect.bottomRight().x(), rect.bottomRight().y())
-                    rectangle_entity = page.get_rectangle(self._entity_id)
-                    if rectangle_entity:
-                        rectangle_entity.start_point = start_point
-                        rectangle_entity.end_point = end_point
-                    if hasattr(main_window, 'redaction_service'):
-                        main_window.redaction_service.resize_redaction_rectangle(
-                            page, self._entity_id, rect.width(), rect.height()
-                        )
     def update_data_model_from_rect(self):
         """
         Update the corresponding RectangleEntity in the data model
-        to match the current geometry of this QGraphicsRectItem.
+        to match the current geometry and position of this QGraphicsRectItem.
         """
-        main_window = self.scene().views()[0].window()
+        scene = self.scene()
+        if scene is None or not scene.views():
+            return
+        main_window = scene.views()[0].window()
         if main_window and hasattr(main_window, 'document_service'):
             document = main_window.document_service.get_current_document()
             if document:
                 page = document.get_current_page()
                 if page:
                     rect = self.rect()
-                    start_point = (rect.topLeft().x(), rect.topLeft().y())
-                    end_point = (rect.bottomRight().x(), rect.bottomRight().y())
-                    # Update the RectangleEntity directly
+                    pos = self.pos()
+                    start_point = (rect.topLeft().x() + pos.x(), rect.topLeft().y() + pos.y())
+                    end_point = (rect.bottomRight().x() + pos.x(), rect.bottomRight().y() + pos.y())
                     rectangle_entity = page.get_rectangle(self._entity_id)
                     if rectangle_entity:
                         rectangle_entity.start_point = start_point
                         rectangle_entity.end_point = end_point
                     # Optionally, call the redaction_service to keep logic centralized
-                    if hasattr(main_window, 'redaction_service'):
-                        main_window.redaction_service.resize_redaction_rectangle(
-                            page, self._entity_id, rect.width(), rect.height()
-                        )
-
-
-
+                    # (Do not call resize_redaction_rectangle here, as we are directly updating the model)
 
 class PhotoViewer(QGraphicsView):
     def __init__(self, parent):
@@ -238,6 +227,8 @@ class PhotoViewer(QGraphicsView):
                     rect_item.setBrush(QBrush(QColor(color).lighter(120))) # Make it slightly lighter
                     rect_item.setOpacity(0.5) # 50% transparency
                     self.scene().addItem(rect_item)
+                    # Ensure model is updated after item is in the scene
+                    rect_item.update_data_model_from_rect()
 
                     if main_window and hasattr(main_window, 'document_service') and main_window.document_service.get_current_document():
                         document = main_window.document_service.get_current_document()

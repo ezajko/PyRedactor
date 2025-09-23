@@ -26,7 +26,7 @@ class FileSystemDocumentRepository(DocumentRepositoryInterface):
         """Load a document from file path"""
         try:
             document = DocumentEntity(file_path=file_path)
-            
+
             if file_path.lower().endswith('.pdf'):
                 pdf = pdfium.PdfDocument(file_path)
                 for i in range(len(pdf)):
@@ -45,14 +45,19 @@ class FileSystemDocumentRepository(DocumentRepositoryInterface):
                     size=pil_image.size
                 )
                 document.add_page(page)
-            
+
             return document
         except Exception as e:
             print(f"Error loading document: {e}")
             return None
 
     def save_document(self, document: DocumentEntity, file_path: str) -> bool:
-        pass
+        """Save document work file to file path"""
+        settings = {
+            "fill_color": "black",
+            "output_quality": "ebook"
+        }
+        return self.save_work_file(document, file_path, settings)
 
     def export_document(self, document: DocumentEntity, file_path: str, settings: dict) -> bool:
         pass
@@ -108,7 +113,7 @@ class FileSystemDocumentRepository(DocumentRepositoryInterface):
                 processed_color = str(rect.color)
                 processed_page_rectangles.append([processed_start, processed_end, processed_color])
             rectangles.append(processed_page_rectangles)
-        
+
         contains_rectangles = [True if len(item) > 0 else False for item in rectangles]
         if any(contains_rectangles):
             return rectangles

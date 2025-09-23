@@ -46,7 +46,16 @@ def main():
         settings_service=settings_service
     )
     window.show()
-    sys.exit(app.exec())
+
+    # Run the application event loop
+    exit_code = app.exec()
+
+    # Clean up threads before exiting
+    if hasattr(window, 'model_thread') and window.model_thread.isRunning():
+        window.model_thread.quit()
+        window.model_thread.wait()
+
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

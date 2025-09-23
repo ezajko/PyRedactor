@@ -32,6 +32,9 @@ from ..core.services.document_management import DocumentManagementService
 from ..core.services.redaction import RedactionService
 from ..core.services.settings import SettingsManagementService
 
+from ..application.model_worker import ModelWorker
+from PySide6.QtCore import QThread
+
 class MainWindow(QMainWindow):
     def __init__(self, document_service: DocumentManagementService, redaction_service: RedactionService, settings_service: SettingsManagementService):
         try:
@@ -45,6 +48,16 @@ class MainWindow(QMainWindow):
 
             self.setWindowTitle("PyRedactor")
             self.resize(1300, 900)
+
+            # --- ModelWorker for background model operations ---
+            # Temporarily disable threading to fix issues
+            # self.model_thread = QThread()
+            self.model_worker = ModelWorker(self.document_service)
+            # self.model_worker.moveToThread(self.model_thread)
+            # self.model_thread.start()
+            # self.model_worker.save_finished.connect(self.on_save_finished)
+            # self.model_worker.export_finished.connect(self.on_export_finished)
+            # self.model_worker.batch_update_finished.connect(self.on_batch_update_finished)
 
             self.fill_color = 'black'
             self.output_quality = 'ebook'
@@ -60,9 +73,7 @@ class MainWindow(QMainWindow):
 
             print("[DEBUG] MainWindow: UI widgets created")
 
-            # --- Undo stack for marker actions ---
-            self.undo_stack = []
-            self._undo_enabled = True
+
 
             available_langs = self.get_available_ocr_languages()
             if available_langs:
@@ -71,8 +82,6 @@ class MainWindow(QMainWindow):
                     self.ocr_lang = available_langs[0]
             else:
                 self.ocr_lang = "eng"
-
-            # Initial undo state will be pushed after a document is loaded
 
             print("[DEBUG] MainWindow: Calling _create_toolbar()")
             self._create_toolbar()
@@ -90,45 +99,19 @@ class MainWindow(QMainWindow):
             print("[DEBUG] MainWindow: Updating status bar")
             self.update_status_bar()
 
-            # --- Undo shortcut ---
-            undo_shortcut = QAction(self)
-            undo_shortcut.setShortcut("Ctrl+Z")
-            undo_shortcut.triggered.connect(self.undo)
-            self.addAction(undo_shortcut)
-
             print("[DEBUG] MainWindow: __init__ finished")
         except Exception as e:
             import traceback
             print("[EXCEPTION] MainWindow __init__ failed:", e)
             traceback.print_exc()
 
-    def push_undo_state(self):
-        """
-        Push a deep copy of the current page's rectangles to the undo stack.
-        """
-        try:
-            print("[DEBUG] push_undo_state: called")
-            document = self.document_service.get_current_document()
-            if document:
-                page = document.get_current_page()
-                if page:
-                    print(f"[DEBUG] push_undo_state: pushing {len(page.rectangles)} rectangles to undo_stack")
-                    self.undo_stack.append(copy.deepcopy(page.rectangles))
-                else:
-                    print("[DEBUG] push_undo_state: no current page")
-            else:
-                print("[DEBUG] push_undo_state: no current document")
-        except Exception as e:
-            import traceback
-            print("[EXCEPTION] push_undo_state failed:", e)
-            traceback.print_exc()
+
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Delete or event.key() == Qt.Key_D:
             selected_items = self.scene.selectedItems()
             for item in selected_items:
                 if isinstance(item, ResizableRectItem):
-                    self.push_undo_state()
                     # Remove from scene
                     self.scene.removeItem(item)
                     print(f"[DEBUG] MainWindow: Deleted marker from scene (ID: {item._entity_id})")
@@ -145,7 +128,6 @@ class MainWindow(QMainWindow):
             selected_items = self.scene.selectedItems()
             for item in selected_items:
                 if isinstance(item, ResizableRectItem):
-                    self.push_undo_state()
                     current_color_index = (self.color_list.index(item.brush().color().name()) + 1) % len(self.color_list)
                     new_color_name = self.color_list[current_color_index]
                     new_color = QColor(new_color_name)
@@ -165,7 +147,6 @@ class MainWindow(QMainWindow):
             selected_items = self.scene.selectedItems()
             for item in selected_items:
                 if isinstance(item, ResizableRectItem):
-                    self.push_undo_state()
                     delta_x = 0
                     delta_y = 0
                     step = 1 # Move by 1 pixel
@@ -188,7 +169,15 @@ class MainWindow(QMainWindow):
                     if document:
                         page = document.get_current_page()
                         if page:
-                            self.redaction_service.move_redaction_rectangle(page, item._entity_id, delta_x, delta_y)
+                            # Update the model to match the new position
+                            rect = item.rect()
+                            pos = item.pos()
+                            start_point = (rect.topLeft().x() + pos.x(), rect.topLeft().y() + pos.y())
+                            end_point = (rect.bottomRight().x() + pos.x(), rect.bottomRight().y() + pos.y())
+                            rectangle_entity = page.get_rectangle(item._entity_id)
+                            if rectangle_entity:
+                                rectangle_entity.start_point = start_point
+                                rectangle_entity.end_point = end_point
                             print(f"[DEBUG] MainWindow: Updated marker position in document data (ID: {item._entity_id})")
             self.scene.update() # Force repaint
         super().keyPressEvent(event)
@@ -210,9 +199,6 @@ class MainWindow(QMainWindow):
         save_as_action.triggered.connect(self.save_as_edited_document)
 
 
-
-        undo_action = QAction(get_icon_from_theme("edit-undo", "undo"), "Undo", self)
-        undo_action.triggered.connect(self.undo)
 
         delete_all_action = QAction(get_icon_from_theme("edit-delete", "delete"), "Delete All", self)
         delete_all_action.triggered.connect(self.delete_all)
@@ -239,7 +225,6 @@ class MainWindow(QMainWindow):
         toolbar.addAction(save_action)
         toolbar.addAction(save_as_action)
         toolbar.addSeparator()
-        toolbar.addAction(undo_action)
         toolbar.addAction(delete_all_action)
         toolbar.addSeparator()
         toolbar.addAction(prev_page_action)
@@ -322,8 +307,6 @@ class MainWindow(QMainWindow):
 
         if file_path:
             from PySide6.QtCore import QThread, Signal, QObject
-            # Push undo state for marker creation
-            self.push_undo_state()
 
             class LoaderWorker(QObject):
                 finished = Signal(object)
@@ -333,7 +316,8 @@ class MainWindow(QMainWindow):
                     self.file_path = file_path
                 def run(self):
                     doc = self.document_service.load_document(self.file_path)
-                    self.finished.emit(doc)
+                    # Instead of emitting signal, return the document directly
+                    return doc
 
             progress = QProgressDialog(f"Loading file: {os.path.basename(file_path)}", None, 0, 0, self)
             progress.setWindowModality(Qt.WindowModal)
@@ -342,12 +326,17 @@ class MainWindow(QMainWindow):
             progress.show()
             QApplication.processEvents()
 
-            self._loader_thread = QThread()
+            # Temporarily disable threading for document loading
+            # self._loader_thread = QThread()
             self._loader_worker = LoaderWorker(self.document_service, file_path)
-            self._loader_worker.moveToThread(self._loader_thread)
-            self._loader_thread.started.connect(self._loader_worker.run)
-            self._loader_worker.finished.connect(self._loader_thread.quit)
-            self._loader_worker.finished.connect(progress.close)
+            # self._loader_worker.moveToThread(self._loader_thread)
+            # self._loader_thread.started.connect(self._loader_worker.run)
+            # self._loader_worker.finished.connect(self._loader_thread.quit)
+            # self._loader_worker.finished.connect(progress.close)
+
+            # Run the loader directly
+            document = self._loader_worker.run()
+
             def on_loaded(document):
                 if document:
                     self.page_list.clear()
@@ -366,9 +355,10 @@ class MainWindow(QMainWindow):
                     )
                 else:
                     QMessageBox.critical(self, "Error", f"Failed to open file: {file_path}")
-            self._loader_worker.finished.connect(on_loaded)
-            self._loader_thread.start()
-            progress.exec()
+            # self._loader_worker.finished.connect(on_loaded)
+            on_loaded(document)
+            # self._loader_thread.start()
+            # progress.exec()
 
     def show_page(self, page_num: int):
         document = self.document_service.get_current_document()
@@ -384,20 +374,19 @@ class MainWindow(QMainWindow):
                 self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
 
                 for rect_entity in page.rectangles:
-                    rect_item = ResizableRectItem(QRectF(
-                        rect_entity.start_point[0],
-                        rect_entity.start_point[1],
-                        rect_entity.width,
-                        rect_entity.height
-                    ), entity_id=rect_entity.id)
+                    # Calculate width and height from start/end points
+                    x0, y0 = rect_entity.start_point
+                    x1, y1 = rect_entity.end_point
+                    width = x1 - x0
+                    height = y1 - y0
+                    rect_item = ResizableRectItem(QRectF(0, 0, width, height), entity_id=rect_entity.id)
+                    rect_item.setPos(x0, y0)
                     rect_item.setBrush(QBrush(QColor(rect_entity.color))) # Use base color
                     rect_item.setOpacity(0.5) # 50% transparency
                     self.scene.addItem(rect_item)
 
             self.update_status_bar()
             self.page_list.setCurrentRow(page_num)
-            # --- Clear undo stack on page change ---
-            self.undo_stack.clear()
 
     def next_page(self):
         document = self.document_service.get_current_document()
@@ -431,21 +420,16 @@ class MainWindow(QMainWindow):
     def zoom_out(self):
         self.view.scale(0.8, 0.8)
 
-    def undo(self):
-        document = self.document_service.get_current_document()
-        if document:
-            page = document.get_current_page()
-            if page:
-                self.push_undo_state()
-                self.redaction_service.clear_all_redactions(page)
-                self.show_page(document.current_page_index)
+
 
     def delete_all(self):
+        """
+        Remove all markers from the current page and update the model.
+        """
         document = self.document_service.get_current_document()
         if document:
             page = document.get_current_page()
             if page:
-                self.push_undo_state()
                 self.redaction_service.clear_all_redactions(page)
                 self.show_page(document.current_page_index)
 
@@ -466,7 +450,13 @@ class MainWindow(QMainWindow):
         redacted_filename = f"{base_name}.Redacted.pdf"
         save_file_path = os.path.join(dir_name, redacted_filename)
 
-        self._export_document(save_file_path)
+        # Call export directly without threading
+        settings = {
+            "ocr_enabled": self.ocr_enabled,
+            "ocr_lang": self.ocr_lang,
+            "output_quality": self.output_quality
+        }
+        self.model_worker.export_document(document, save_file_path, settings)
 
     def save_as_edited_document(self):
         document = self.document_service.get_current_document()
@@ -494,41 +484,8 @@ class MainWindow(QMainWindow):
                 "output_quality": self.output_quality
             }
 
-            from PySide6.QtCore import QThread, Signal, QObject
-
-            class ExportWorker(QObject):
-                finished = Signal(bool)
-                def __init__(self, document_service, document, save_file_path, settings):
-                    super().__init__()
-                    self.document_service = document_service
-                    self.document = document
-                    self.save_file_path = save_file_path
-                    self.settings = settings
-                def run(self):
-                    result = self.document_service.export_document(self.document, self.save_file_path, self.settings)
-                    self.finished.emit(result)
-
-            progress = QProgressDialog(f"Exporting PDF: {os.path.basename(save_file_path)}", None, 0, 0, self)
-            progress.setWindowModality(Qt.WindowModal)
-            progress.setWindowTitle(f"Exporting: {os.path.basename(save_file_path)}")
-            progress.setMinimumDuration(0)
-            progress.show()
-            QApplication.processEvents()
-
-            self._export_thread = QThread()
-            self._export_worker = ExportWorker(self.document_service, document, save_file_path, settings)
-            self._export_worker.moveToThread(self._export_thread)
-            self._export_thread.started.connect(self._export_worker.run)
-            self._export_worker.finished.connect(self._export_thread.quit)
-            self._export_worker.finished.connect(progress.close)
-            def on_exported(success):
-                if success:
-                    QMessageBox.information(self, "Export PDF", f"Document exported successfully to {save_file_path}")
-                else:
-                    QMessageBox.critical(self, "Export PDF", "Failed to export document.")
-            self._export_worker.finished.connect(on_exported)
-            self._export_thread.start()
-            progress.exec()
+            # Call export directly without threading
+            self.model_worker.export_document(document, save_file_path, settings)
 
     def about(self):
         QMessageBox.about(self, "About PyRedactor",
@@ -537,46 +494,54 @@ class MainWindow(QMainWindow):
                           "Licensed under GPL V3.0\n\n"
                           "©2025 Ernedin Zajko <ezajko@root.ba>")
 
+    def trigger_batch_marker_operation(self, update_func):
+        """
+        Trigger a batch marker/model operation in the background using ModelWorker.
+        update_func should be a callable that takes the document and performs updates.
+        """
+        document = self.document_service.get_current_document()
+        if document:
+            self.model_worker.batch_update(document, update_func)
+        else:
+            QMessageBox.warning(self, "Batch Operation", "No document loaded.")
 
-        # Only undo if there is a previous state
-        if len(self.undo_stack) > 1:
-            self.undo_stack.pop()  # Remove current state
-            prev_rectangles = copy.deepcopy(self.undo_stack[-1])
-            page.rectangles = prev_rectangles
-            self.show_page(document.current_page_index)
-        elif len(self.undo_stack) == 1:
-            # Undo to empty state
-            self.undo_stack.pop()
-            page.rectangles = []
-            self.show_page(document.current_page_index)
+    def on_batch_update_finished(self, success, message):
+        if success:
+            QMessageBox.information(self, "Batch Operation", message)
+            # Optionally refresh the UI
+            self.show_page(self.document_service.get_current_document().current_page_index)
+        else:
+            QMessageBox.critical(self, "Batch Operation", message)
 
-# --- Patch for robust undo on marker move/resize via mouse ---
-from PySide6.QtWidgets import QGraphicsRectItem
-from PySide6.QtCore import Qt
+    def on_save_finished(self, success, message):
+        if success:
+            QMessageBox.information(self, "Save Document", message)
+        else:
+            QMessageBox.critical(self, "Save Document", message)
 
-# Patch ResizableRectItem to push undo state on mouse press for move/resize
-from PyRedactor.pyredactor.ui.graphics_items import ResizableRectItem, HandleItem
+    def on_export_finished(self, success, message):
+        if success:
+            QMessageBox.information(self, "Export PDF", message)
+        else:
+            QMessageBox.critical(self, "Export PDF", message)
 
-def patched_mousePressEvent(self, event):
-    # If left mouse button and not already selected, push undo state
-    if event.button() == Qt.LeftButton:
-        main_window = self.scene().views()[0].window()
-        if main_window and hasattr(main_window, "push_undo_state"):
-            main_window.push_undo_state()
-    QGraphicsRectItem.mousePressEvent(self, event)
-
-ResizableRectItem.mousePressEvent = patched_mousePressEvent
-
-def patched_handle_mousePressEvent(self, event):
-    if event.button() == Qt.LeftButton:
-        main_window = self.scene().views()[0].window()
-        if main_window and hasattr(main_window, "push_undo_state"):
-            main_window.push_undo_state()
-    QGraphicsRectItem.mousePressEvent(self, event)
-
-HandleItem.mousePressEvent = patched_handle_mousePressEvent
+    def closeEvent(self, event):
+        """Clean up threads when closing the application"""
+        # Quit and wait for the model thread to finish (if threading is enabled)
+        if hasattr(self, 'model_thread') and self.model_thread and self.model_thread.isRunning():
+            self.model_thread.quit()
+            self.model_thread.wait()
+        event.accept()
 
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     sys.exit(app.exec())
+
+    def closeEvent(self, event):
+        """Clean up threads when closing the application"""
+        # Quit and wait for the model thread to finish
+        if hasattr(self, 'model_thread') and self.model_thread.isRunning():
+            self.model_thread.quit()
+            self.model_thread.wait()
+        event.accept()
