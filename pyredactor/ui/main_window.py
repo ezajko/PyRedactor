@@ -37,73 +37,69 @@ from PySide6.QtCore import QThread
 
 class MainWindow(QMainWindow):
     def __init__(self, document_service: DocumentManagementService, redaction_service: RedactionService, settings_service: SettingsManagementService):
-        try:
-            super().__init__()
+        super().__init__()
 
-            print("[DEBUG] MainWindow: __init__ started")
+        print("[DEBUG] MainWindow: __init__ started")
 
-            self.document_service = document_service
-            self.redaction_service = redaction_service
-            self.settings_service = settings_service
+        self.document_service = document_service
+        self.redaction_service = redaction_service
+        self.settings_service = settings_service
 
-            self.setWindowTitle("PyRedactor")
-            self.resize(1300, 900)
+        self.setWindowTitle("PyRedactor")
+        self.resize(1300, 900)
 
-            # --- ModelWorker for background model operations ---
-            # Temporarily disable threading to fix issues
-            # self.model_thread = QThread()
-            self.model_worker = ModelWorker(self.document_service)
-            # self.model_worker.moveToThread(self.model_thread)
-            # self.model_thread.start()
-            # self.model_worker.save_finished.connect(self.on_save_finished)
-            # self.model_worker.export_finished.connect(self.on_export_finished)
-            # self.model_worker.batch_update_finished.connect(self.on_batch_update_finished)
+        # --- ModelWorker for background model operations ---
+        # Temporarily disable threading to fix issues
+        # self.model_thread = QThread()
+        self.model_worker = ModelWorker()
+        self.model_worker.document_service = self.document_service
+        # self.model_worker.moveToThread(self.model_thread)
+        # self.model_thread.start()
+        # self.model_worker.save_finished.connect(self.on_save_finished)
+        # self.model_worker.export_finished.connect(self.on_export_finished)
+        # self.model_worker.batch_update_finished.connect(self.on_batch_update_finished)
 
-            self.fill_color = 'black'
-            self.output_quality = 'ebook'
-            self.history_length = 30
-            self.color_list = ["#000000", "#ffffff", "#ff0000", "#00ff00"] # Black, White, Red, Green (hex codes)
+        self.fill_color = 'black'
+        self.output_quality = 'ebook'
+        self.history_length = 30
+        self.color_list = ["#000000", "#ffffff", "#ff0000", "#00ff00"] # Black, White, Red, Green (hex codes)
 
-            self.page_list = QListWidget()
-            self.scene = QGraphicsScene()
-            self.view = PhotoViewer(self)
-            self.view.setScene(self.scene)
+        self.page_list = QListWidget()
+        self.scene = QGraphicsScene()
+        self.view = PhotoViewer(self)
+        self.view.setScene(self.scene)
 
-            self.ocr_enabled = True
+        self.ocr_enabled = True
 
-            print("[DEBUG] MainWindow: UI widgets created")
+        print("[DEBUG] MainWindow: UI widgets created")
 
+        # Temporarily disable OCR language detection to avoid hangs
+        # available_langs = self.get_available_ocr_languages()
+        available_langs = ["eng"]  # Default to English
+        if available_langs:
+            self.ocr_lang = os.getenv('PYREDACTOR_OCR_LANG', available_langs[0])
+            if self.ocr_lang not in available_langs:
+                self.ocr_lang = available_langs[0]
+        else:
+            self.ocr_lang = "eng"
 
+        print("[DEBUG] MainWindow: Calling _create_toolbar()")
+        self._create_toolbar()
+        print("[DEBUG] MainWindow: Toolbar created")
 
-            available_langs = self.get_available_ocr_languages()
-            if available_langs:
-                self.ocr_lang = os.getenv('PYREDACTOR_OCR_LANG', available_langs[0])
-                if self.ocr_lang not in available_langs:
-                    self.ocr_lang = available_langs[0]
-            else:
-                self.ocr_lang = "eng"
+        print("[DEBUG] MainWindow: Setting central widget")
+        self.setCentralWidget(self.view)
 
-            print("[DEBUG] MainWindow: Calling _create_toolbar()")
-            self._create_toolbar()
-            print("[DEBUG] MainWindow: Toolbar created")
+        print("[DEBUG] MainWindow: Creating page browser")
+        self._create_page_browser()
 
-            print("[DEBUG] MainWindow: Setting central widget")
-            self.setCentralWidget(self.view)
+        print("[DEBUG] MainWindow: Setting status bar")
+        self.setStatusBar(QStatusBar(self))
 
-            print("[DEBUG] MainWindow: Creating page browser")
-            self._create_page_browser()
+        print("[DEBUG] MainWindow: Updating status bar")
+        self.update_status_bar()
 
-            print("[DEBUG] MainWindow: Setting status bar")
-            self.setStatusBar(QStatusBar(self))
-
-            print("[DEBUG] MainWindow: Updating status bar")
-            self.update_status_bar()
-
-            print("[DEBUG] MainWindow: __init__ finished")
-        except Exception as e:
-            import traceback
-            print("[EXCEPTION] MainWindow __init__ failed:", e)
-            traceback.print_exc()
+        print("[DEBUG] MainWindow: __init__ finished")
 
 
 
@@ -183,11 +179,13 @@ class MainWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def _create_toolbar(self):
+        print("[DEBUG] MainWindow: _create_toolbar started")
         toolbar = QToolBar("Main Toolbar")
         toolbar.setIconSize(QSize(32, 32))
         toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
         toolbar.layout().setSpacing(10)
         self.addToolBar(toolbar)
+        print("[DEBUG] MainWindow: Toolbar created")
 
         open_action = QAction(get_icon_from_theme("document-open", "open"), "Open", self)
         open_action.triggered.connect(self.open_file)
@@ -197,8 +195,6 @@ class MainWindow(QMainWindow):
 
         save_as_action = QAction(get_icon_from_theme("document-save-as", "save_as"), "Save As", self)
         save_as_action.triggered.connect(self.save_as_edited_document)
-
-
 
         delete_all_action = QAction(get_icon_from_theme("edit-delete", "delete"), "Delete All", self)
         delete_all_action.triggered.connect(self.delete_all)
@@ -234,8 +230,6 @@ class MainWindow(QMainWindow):
         toolbar.addAction(zoom_out_action)
         toolbar.addSeparator()
 
-
-
         self.quality_combo = QComboBox()
         self.quality_combo.addItems(["screen", "ebook", "printer", "prepress"])
         self.quality_combo.setCurrentText(self.output_quality)
@@ -243,8 +237,6 @@ class MainWindow(QMainWindow):
         self.quality_combo.setMinimumHeight(32)
         toolbar.addWidget(self.quality_combo)
         toolbar.addSeparator()
-
-
 
         self.ocr_checkbox = QCheckBox("Enable OCR")
         self.ocr_checkbox.setChecked(self.ocr_enabled)
@@ -271,6 +263,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(quit_action)
         toolbar.addSeparator()
         toolbar.addAction(about_action)
+        print("[DEBUG] MainWindow: _create_toolbar finished")
 
     def _create_page_browser(self):
         self.page_browser_dock = QDockWidget("Page Browser", self)
@@ -316,15 +309,7 @@ class MainWindow(QMainWindow):
                     self.file_path = file_path
                 def run(self):
                     doc = self.document_service.load_document(self.file_path)
-                    # Instead of emitting signal, return the document directly
-                    return doc
-
-            progress = QProgressDialog(f"Loading file: {os.path.basename(file_path)}", None, 0, 0, self)
-            progress.setWindowModality(Qt.WindowModal)
-            progress.setWindowTitle(f"Loading: {os.path.basename(file_path)}")
-            progress.setMinimumDuration(0)
-            progress.show()
-            QApplication.processEvents()
+                    self.finished.emit(doc)
 
             # Temporarily disable threading for document loading
             # self._loader_thread = QThread()
@@ -335,7 +320,7 @@ class MainWindow(QMainWindow):
             # self._loader_worker.finished.connect(progress.close)
 
             # Run the loader directly
-            document = self._loader_worker.run()
+            document = self.document_service.load_document(file_path)
 
             def on_loaded(document):
                 if document:
@@ -528,9 +513,13 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Clean up threads when closing the application"""
         # Quit and wait for the model thread to finish (if threading is enabled)
-        if hasattr(self, 'model_thread') and self.model_thread and self.model_thread.isRunning():
+        if hasattr(self, 'model_thread') and self.model_thread and hasattr(self.model_thread, 'isRunning') and self.model_thread.isRunning():
             self.model_thread.quit()
             self.model_thread.wait()
+        # Clean up loader thread if it exists
+        if hasattr(self, '_loader_thread') and self._loader_thread and hasattr(self._loader_thread, 'isRunning') and self._loader_thread.isRunning():
+            self._loader_thread.quit()
+            self._loader_thread.wait()
         event.accept()
 
 

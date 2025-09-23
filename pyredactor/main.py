@@ -51,9 +51,14 @@ def main():
     exit_code = app.exec()
 
     # Clean up threads before exiting
-    if hasattr(window, 'model_thread') and window.model_thread.isRunning():
+    if hasattr(window, 'model_thread') and window.model_thread and window.model_thread.isRunning():
         window.model_thread.quit()
         window.model_thread.wait()
+
+    # Clean up loader thread if it exists
+    if hasattr(window, '_loader_thread') and window._loader_thread and window._loader_thread.isRunning():
+        window._loader_thread.quit()
+        window._loader_thread.wait()
 
     sys.exit(exit_code)
 
