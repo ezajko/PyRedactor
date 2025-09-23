@@ -33,6 +33,9 @@ from ..core.services.redaction import RedactionService
 from ..core.services.settings import SettingsManagementService
 
 from ..application.model_worker import ModelWorker
+from ..application.export_worker import ExportWorker
+from ..application.document_loader_worker import DocumentLoaderWorker
+from ..application.batch_worker import BatchOperationWorker
 from PySide6.QtCore import QThread
 
 class MainWindow(QMainWindow):
@@ -299,51 +302,81 @@ class MainWindow(QMainWindow):
             )
 
         if file_path:
-            from PySide6.QtCore import QThread, Signal, QObject
+            # Use threaded document loading with progress dialog
+            self._load_document_threaded(file_path)
 
-            class LoaderWorker(QObject):
-                finished = Signal(object)
-                def __init__(self, document_service, file_path):
-                    super().__init__()
-                    self.document_service = document_service
-                    self.file_path = file_path
-                def run(self):
-                    doc = self.document_service.load_document(self.file_path)
-                    self.finished.emit(doc)
+    def _load_document_threaded(self, file_path):
+        """Load document using background thread with progress dialog"""
+        from ..application.document_loader_worker import DocumentLoaderWorker
 
-            # Temporarily disable threading for document loading
-            # self._loader_thread = QThread()
-            self._loader_worker = LoaderWorker(self.document_service, file_path)
-            # self._loader_worker.moveToThread(self._loader_thread)
-            # self._loader_thread.started.connect(self._loader_worker.run)
-            # self._loader_worker.finished.connect(self._loader_thread.quit)
-            # self._loader_worker.finished.connect(progress.close)
+        # Create progress dialog
+        self._load_progress_dialog = QProgressDialog(f"Loading file: {os.path.basename(file_path)}", "Cancel", 0, 100, self)
+        self._load_progress_dialog.setWindowModality(Qt.WindowModal)
+        self._load_progress_dialog.setWindowTitle(f"Loading: {os.path.basename(file_path)}")
+        self._load_progress_dialog.setMinimumDuration(0)
+        self._load_progress_dialog.setAutoClose(False)
+        self._load_progress_dialog.setAutoReset(False)
 
-            # Run the loader directly
-            document = self.document_service.load_document(file_path)
+        # Create worker and thread
+        self.loader_thread = QThread()
+        self.loader_worker = DocumentLoaderWorker(self.document_service, file_path)
 
-            def on_loaded(document):
-                if document:
-                    self.page_list.clear()
-                    for i, page in enumerate(document.pages):
-                        thumbnail = page.image.copy()
-                        thumbnail.thumbnail((100, 100))
-                        qimage = ImageQt(thumbnail)
-                        pixmap = QPixmap.fromImage(qimage)
-                        item = QListWidgetItem(QIcon(pixmap), f"Page {i+1}")
-                        self.page_list.addItem(item)
-                    self.show_page(0)
-                    self.update_status_bar()
-                    # Show loaded file info in status bar
-                    self.statusBar().showMessage(
-                        f"Loaded: {os.path.basename(file_path)} | {file_path} | Pages: {len(document.pages)} | Markers: {document.total_rectangles}"
-                    )
-                else:
-                    QMessageBox.critical(self, "Error", f"Failed to open file: {file_path}")
-            # self._loader_worker.finished.connect(on_loaded)
-            on_loaded(document)
-            # self._loader_thread.start()
-            # progress.exec()
+        # Move worker to thread
+        self.loader_worker.moveToThread(self.loader_thread)
+
+        # Connect signals
+        self.loader_thread.started.connect(self.loader_worker.load_document)
+        self.loader_worker.progress_update.connect(self._update_load_progress)
+        self.loader_worker.page_loaded.connect(self._on_page_loaded)
+        self.loader_worker.finished.connect(self._on_document_loaded)
+        self.loader_worker.error.connect(self._on_load_error)
+        self.loader_worker.finished.connect(self.loader_thread.quit)
+        self.loader_worker.finished.connect(self.loader_worker.deleteLater)
+        self.loader_thread.finished.connect(self.loader_thread.deleteLater)
+        self._load_progress_dialog.canceled.connect(self.loader_worker.cancel)
+
+        # Clear page list and start loading
+        self.page_list.clear()
+        self.loader_thread.start()
+        self._load_progress_dialog.show()
+
+    def _update_load_progress(self, message, percentage):
+        """Update document load progress dialog"""
+        if hasattr(self, '_load_progress_dialog'):
+            self._load_progress_dialog.setLabelText(message)
+            self._load_progress_dialog.setValue(percentage)
+
+    def _on_page_loaded(self, thumbnail_image, page_index):
+        """Handle page thumbnail loading"""
+        if thumbnail_image and hasattr(self, '_load_progress_dialog'):
+            qimage = ImageQt(thumbnail_image)
+            pixmap = QPixmap.fromImage(qimage)
+            item = QListWidgetItem(QIcon(pixmap), f"Page {page_index+1}")
+            self.page_list.addItem(item)
+
+    def _on_document_loaded(self, document):
+        """Handle document loading completion"""
+        # Close progress dialog
+        if hasattr(self, '_load_progress_dialog'):
+            self._load_progress_dialog.close()
+            delattr(self, '_load_progress_dialog')
+
+        if document:
+            self.show_page(0)
+            self.update_status_bar()
+            # Show loaded file info in status bar
+            self.statusBar().showMessage(
+                f"Loaded: {os.path.basename(document.file_path)} | {document.file_path} | Pages: {len(document.pages)} | Markers: {document.total_rectangles}"
+            )
+        else:
+            QMessageBox.critical(self, "Error", "Document loading was cancelled or failed.")
+
+    def _on_load_error(self, error_message):
+        """Handle document loading errors"""
+        if hasattr(self, '_load_progress_dialog'):
+            self._load_progress_dialog.close()
+            delattr(self, '_load_progress_dialog')
+        QMessageBox.critical(self, "Error", f"Failed to open file: {error_message}")
 
     def show_page(self, page_num: int):
         document = self.document_service.get_current_document()
@@ -435,13 +468,80 @@ class MainWindow(QMainWindow):
         redacted_filename = f"{base_name}.Redacted.pdf"
         save_file_path = os.path.join(dir_name, redacted_filename)
 
-        # Call export directly without threading
+        # Use threaded export with progress dialog
+        self._export_document_threaded(save_file_path)
+
+    def _export_document_threaded(self, save_file_path):
+        """Export document using background thread with progress dialog"""
+        document = self.document_service.get_current_document()
+        if not document:
+            return
+
+        # Create progress dialog
+        self._export_progress_dialog = QProgressDialog("Exporting document...", "Cancel", 0, 100, self)
+        self._export_progress_dialog.setWindowModality(Qt.WindowModal)
+        self._export_progress_dialog.setWindowTitle("Export Progress")
+        self._export_progress_dialog.setMinimumDuration(0)  # Show immediately
+        self._export_progress_dialog.setAutoClose(False)
+        self._export_progress_dialog.setAutoReset(False)
+
+        # Create worker and thread
         settings = {
             "ocr_enabled": self.ocr_enabled,
             "ocr_lang": self.ocr_lang,
             "output_quality": self.output_quality
         }
-        self.model_worker.export_document(document, save_file_path, settings)
+
+        self.export_thread = QThread()
+        self.export_worker = ExportWorker(
+            self.document_service,
+            document,
+            save_file_path,
+            settings
+        )
+
+        # Move worker to thread
+        self.export_worker.moveToThread(self.export_thread)
+
+        # Connect signals
+        self.export_thread.started.connect(self.export_worker.export_document)
+        self.export_worker.progress_update.connect(self._update_export_progress)
+        self.export_worker.finished.connect(self._on_export_finished)
+        self.export_worker.error.connect(self._on_export_error)
+        self.export_worker.finished.connect(self.export_thread.quit)
+        self.export_worker.finished.connect(self.export_worker.deleteLater)
+        self.export_thread.finished.connect(self.export_thread.deleteLater)
+        self._export_progress_dialog.canceled.connect(self.export_worker.cancel)
+
+        # Start the export
+        self.export_thread.start()
+        self._export_progress_dialog.show()
+
+    def _update_export_progress(self, message, percentage):
+        """Update progress dialog with current status"""
+        if hasattr(self, '_progress_dialog'):
+            self._export_progress_dialog.setLabelText(message)
+            self._export_progress_dialog.setValue(percentage)
+
+    def _on_export_finished(self, success, message, file_path):
+        """Handle export completion"""
+        # Close progress dialog
+        if hasattr(self, '_export_progress_dialog'):
+            self._export_progress_dialog.close()
+            delattr(self, '_export_progress_dialog')
+
+        # Show result message
+        if success:
+            QMessageBox.information(self, "Export Successful", message)
+        else:
+            QMessageBox.critical(self, "Export Failed", message)
+
+    def _on_export_error(self, error_message):
+        """Handle export errors"""
+        if hasattr(self, '_export_progress_dialog'):
+            self._export_progress_dialog.close()
+            delattr(self, '_export_progress_dialog')
+        QMessageBox.critical(self, "Export Error", f"An error occurred during export:\n{error_message}")
 
     def save_as_edited_document(self):
         document = self.document_service.get_current_document()
@@ -458,19 +558,7 @@ class MainWindow(QMainWindow):
             self, "Save Document As", suggested_filename, "PDF Files (*.pdf)"
         )
         if save_file_path:
-            self._export_document(save_file_path)
-
-    def _export_document(self, save_file_path):
-        document = self.document_service.get_current_document()
-        if document:
-            settings = {
-                "ocr_enabled": self.ocr_enabled,
-                "ocr_lang": self.ocr_lang,
-                "output_quality": self.output_quality
-            }
-
-            # Call export directly without threading
-            self.model_worker.export_document(document, save_file_path, settings)
+            self._export_document_threaded(save_file_path)
 
     def about(self):
         QMessageBox.about(self, "About PyRedactor",
@@ -512,14 +600,30 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Clean up threads when closing the application"""
-        # Quit and wait for the model thread to finish (if threading is enabled)
-        if hasattr(self, 'model_thread') and self.model_thread and hasattr(self.model_thread, 'isRunning') and self.model_thread.isRunning():
-            self.model_thread.quit()
-            self.model_thread.wait()
+        # Clean up export thread if it exists
+        if hasattr(self, 'export_thread') and self.export_thread:
+            try:
+                if self.export_thread.isRunning():
+                    if hasattr(self, 'export_worker'):
+                        self.export_worker.cancel()
+                    self.export_thread.quit()
+                    self.export_thread.wait()
+            except RuntimeError:
+                # Thread already deleted
+                pass
+
         # Clean up loader thread if it exists
-        if hasattr(self, '_loader_thread') and self._loader_thread and hasattr(self._loader_thread, 'isRunning') and self._loader_thread.isRunning():
-            self._loader_thread.quit()
-            self._loader_thread.wait()
+        if hasattr(self, 'loader_thread') and self.loader_thread:
+            try:
+                if self.loader_thread.isRunning():
+                    if hasattr(self, 'loader_worker'):
+                        self.loader_worker.cancel()
+                    self.loader_thread.quit()
+                    self.loader_thread.wait()
+            except RuntimeError:
+                # Thread already deleted
+                pass
+
         event.accept()
 
 
