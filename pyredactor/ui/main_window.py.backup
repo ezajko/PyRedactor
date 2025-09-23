@@ -306,17 +306,16 @@ class MainWindow(QMainWindow):
             self._load_document_threaded(file_path)
 
     def _load_document_threaded(self, file_path):
-        """Load document using background thread with enhanced progress dialog"""
+        """Load document using background thread with progress dialog"""
         from ..application.document_loader_worker import DocumentLoaderWorker
 
-        # Create enhanced progress dialog
+        # Create progress dialog
         self._load_progress_dialog = QProgressDialog(f"Loading file: {os.path.basename(file_path)}", "Cancel", 0, 100, self)
         self._load_progress_dialog.setWindowModality(Qt.WindowModal)
         self._load_progress_dialog.setWindowTitle(f"Loading: {os.path.basename(file_path)}")
-        self._load_progress_dialog.setMinimumDuration(0)  # Show immediately
+        self._load_progress_dialog.setMinimumDuration(0)
         self._load_progress_dialog.setAutoClose(False)
         self._load_progress_dialog.setAutoReset(False)
-        self._load_progress_dialog.setFixedSize(400, 120)  # Fixed size for better appearance
 
         # Create worker and thread
         self.loader_thread = QThread()
@@ -342,12 +341,10 @@ class MainWindow(QMainWindow):
         self._load_progress_dialog.show()
 
     def _update_load_progress(self, message, percentage):
-        """Update document load progress dialog and status bar"""
+        """Update document load progress dialog"""
         if hasattr(self, '_load_progress_dialog'):
             self._load_progress_dialog.setLabelText(message)
             self._load_progress_dialog.setValue(percentage)
-        # Update status bar with current operation
-        self.statusBar().showMessage(f"Loading: {message}")
 
     def _on_page_loaded(self, thumbnail_image, page_index):
         """Handle page thumbnail loading"""
@@ -475,19 +472,18 @@ class MainWindow(QMainWindow):
         self._export_document_threaded(save_file_path)
 
     def _export_document_threaded(self, save_file_path):
-        """Export document using background thread with enhanced progress dialog"""
+        """Export document using background thread with progress dialog"""
         document = self.document_service.get_current_document()
         if not document:
             return
 
-        # Create enhanced progress dialog
+        # Create progress dialog
         self._export_progress_dialog = QProgressDialog("Exporting document...", "Cancel", 0, 100, self)
         self._export_progress_dialog.setWindowModality(Qt.WindowModal)
         self._export_progress_dialog.setWindowTitle("Export Progress")
         self._export_progress_dialog.setMinimumDuration(0)  # Show immediately
         self._export_progress_dialog.setAutoClose(False)
         self._export_progress_dialog.setAutoReset(False)
-        self._export_progress_dialog.setFixedSize(400, 120)  # Fixed size for better appearance
 
         # Create worker and thread
         settings = {
@@ -522,12 +518,10 @@ class MainWindow(QMainWindow):
         self._export_progress_dialog.show()
 
     def _update_export_progress(self, message, percentage):
-        """Update export progress dialog and status bar"""
-        if hasattr(self, '_export_progress_dialog'):
+        """Update progress dialog with current status"""
+        if hasattr(self, '_progress_dialog'):
             self._export_progress_dialog.setLabelText(message)
             self._export_progress_dialog.setValue(percentage)
-        # Update status bar with current operation
-        self.statusBar().showMessage(f"Exporting: {message}")
 
     def _on_export_finished(self, success, message, file_path):
         """Handle export completion"""
@@ -583,14 +577,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Batch Operation", "No document loaded.")
             return
 
-        # Create enhanced progress dialog
+        # Create progress dialog
         self._batch_progress_dialog = QProgressDialog(f"{operation_name} in progress...", "Cancel", 0, 100, self)
         self._batch_progress_dialog.setWindowModality(Qt.WindowModal)
         self._batch_progress_dialog.setWindowTitle(operation_name)
         self._batch_progress_dialog.setMinimumDuration(0)
         self._batch_progress_dialog.setAutoClose(False)
         self._batch_progress_dialog.setAutoReset(False)
-        self._batch_progress_dialog.setFixedSize(400, 120)  # Fixed size for better appearance
 
         # Create worker and thread
         self.batch_thread = QThread()
@@ -614,12 +607,10 @@ class MainWindow(QMainWindow):
         self._batch_progress_dialog.show()
 
     def _update_batch_progress(self, message, percentage):
-        """Update batch operation progress dialog and status bar"""
+        """Update batch operation progress dialog"""
         if hasattr(self, '_batch_progress_dialog'):
             self._batch_progress_dialog.setLabelText(message)
             self._batch_progress_dialog.setValue(percentage)
-        # Update status bar with current operation
-        self.statusBar().showMessage(f"Batch Operation: {message}")
 
     def _on_batch_finished(self, success, message):
         """Handle batch operation completion"""
@@ -665,11 +656,8 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.critical(self, "Export PDF", message)
 
-        QMessageBox.critical(self, "Export PDF", message)
-
-        event.accept()
-
-
-if __name__ == "__main__":
+    if __name__ == "__main__":
     app = QApplication(sys.argv)
     sys.exit(app.exec())
+
+    event.accept()

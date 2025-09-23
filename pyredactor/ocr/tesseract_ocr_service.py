@@ -22,12 +22,12 @@ class TesseractOCRService(OCRServiceInterface):
             final_image = self._draw_rectangles(page)
             if final_image.mode != 'RGB':
                 final_image = final_image.convert('RGB')
-            
+
             if enabled:
                 pdf_page = pytesseract.image_to_pdf_or_hocr(final_image, extension='pdf', lang=lang)
             else:
                 pdf_page = pytesseract.image_to_pdf_or_hocr(final_image, extension='pdf')
-            
+
             return pdf_page
         except Exception as e:
             print(f"Error processing page with OCR: {e}")

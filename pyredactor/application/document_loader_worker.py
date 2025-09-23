@@ -34,20 +34,21 @@ class DocumentLoaderWorker(QObject):
     def load_document(self):
         """Load document with progress updates"""
         try:
-            self.progress_update.emit("Loading document...", 0)
+            self.progress_update.emit("Initializing document loader...", 0)
 
             # Load the document
+            self.progress_update.emit("Loading document from file...", 5)
             document = self.document_service.load_document(self.file_path)
 
             if not document:
-                self.error.emit("Failed to load document")
+                self.error.emit("Failed to load document - invalid file format or corrupted file")
                 return
 
             if self._cancelled:
                 self.finished.emit(None)
                 return
 
-            self.progress_update.emit("Processing pages...", 50)
+            self.progress_update.emit(f"Document loaded - processing {len(document.pages)} pages...", 15)
 
             # Process each page for thumbnails
             total_pages = len(document.pages)
@@ -56,9 +57,9 @@ class DocumentLoaderWorker(QObject):
                     self.finished.emit(None)
                     return
 
-                # Update progress
-                progress = int(50 + (i / total_pages) * 50)  # 50-100% for page processing
-                self.progress_update.emit(f"Processing page {i+1} of {total_pages}...", progress)
+                # Update progress with more detailed information
+                page_progress = 15 + int((i / total_pages) * 80)  # 15-95% for page processing
+                self.progress_update.emit(f"Processing page {i+1} of {total_pages} - rendering thumbnail...", page_progress)
 
                 # Create thumbnail
                 if page.image:
@@ -66,11 +67,11 @@ class DocumentLoaderWorker(QObject):
                     thumbnail.thumbnail((100, 100))
                     self.page_loaded.emit(thumbnail, i)
 
-            self.progress_update.emit("Document loaded successfully!", 100)
+            self.progress_update.emit("Document processing completed successfully!", 100)
             self.finished.emit(document)
 
         except Exception as e:
-            self.error.emit(str(e))
+            self.error.emit(f"Error loading document: {str(e)}")
 
     def cancel(self):
         """Cancel the load operation"""
