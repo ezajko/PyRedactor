@@ -73,10 +73,11 @@ class ExportWorker(QObject):
             self.progress_update.emit("Finalizing PDF structure...", 75)
 
             # Add Metadata
+            doc_title = self.document.title if self.document.title else "Untitled"
             metadata = {
                 '/Producer': 'PyRedactor',
                 '/Creator': 'PyRedactor',
-                '/Title': 'Redacted Document'
+                '/Title': f'Redacted document: {doc_title}'
             }
             merger.add_metadata(metadata)
 
