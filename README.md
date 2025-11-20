@@ -27,6 +27,12 @@ PyRedactor is a powerful, open-source PDF redaction tool built with Python and P
     sudo apt update
     sudo apt install python3-pip python3-venv tesseract-ocr libtesseract-dev
     ```
+    
+    *Note: PySide6 (Qt) usually works out of the box, but if you encounter errors about missing libraries (e.g., libxcb), you may need to install additional system dependencies:*
+    ```bash
+    sudo apt install libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xinput0 libxcb-xfixes0 libgl1-mesa-glx
+    ```
+
     *Optional: Install `unpaper` for advanced image enhancement:*
     ```bash
     sudo apt install unpaper
