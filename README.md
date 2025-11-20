@@ -82,6 +82,19 @@ PyRedactor is a powerful, open-source PDF redaction tool built with Python and P
     pip install -r requirements.txt
     ```
 
+### Running on Linux/macOS
+
+**Option 1: Using the Bash Script (Recommended)**
+We have included a `run_linux.sh` file for convenience.
+1.  Make it executable (first time only): `chmod +x run_linux.sh`
+2.  Run it: `./run_linux.sh`
+    *   *You can also create a desktop shortcut pointing to this script.*
+
+**Option 2: Command Line**
+```bash
+python3 -m pyredactor.main
+```
+
 ### Running on Windows
 
 **Option 1: Using the Batch File (Recommended)**
