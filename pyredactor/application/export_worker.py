@@ -72,6 +72,14 @@ class ExportWorker(QObject):
             # Phase 2: Finalizing PDF
             self.progress_update.emit("Finalizing PDF structure...", 75)
 
+            # Add Metadata
+            metadata = {
+                '/Producer': 'PyRedactor',
+                '/Creator': 'PyRedactor',
+                '/Title': 'Redacted Document'
+            }
+            merger.add_metadata(metadata)
+
             output_stream = io.BytesIO()
             merger.write(output_stream)
             merger.close()
