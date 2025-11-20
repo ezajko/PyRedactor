@@ -822,6 +822,11 @@ class MainWindow(QMainWindow):
         self._export_progress_dialog.setAutoReset(False)
         self._export_progress_dialog.setFixedSize(400, 120)
 
+        # Sync current UI settings to settings object before export
+        self.settings.ocr_enabled = self.ocr_enabled
+        if self.selected_ocr_langs:
+            self.settings.ocr_language = "+".join(self.selected_ocr_langs)
+
         # Create worker and thread
         self.export_thread = QThread()
         self.export_worker = ExportWorker(self.document_service, self.document_service.get_current_document(), file_path, self.settings.__dict__)
