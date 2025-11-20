@@ -147,3 +147,4 @@ This project is licensed under the GPLv3 License. See the `LICENSE` file for det
 ## Credits
 
 *   **Ernedin Zajko** - *Initial Work*
+*   Inspired by [CoverUP](https://github.com/digidigital/CoverUP) by DigiDigital.
