@@ -16,7 +16,8 @@ import pytesseract
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QToolBar, QGraphicsView, QGraphicsScene, QFileDialog,
     QRubberBand, QGraphicsRectItem, QMessageBox, QStatusBar, QDockWidget, QListWidget, QListWidgetItem,
-    QComboBox, QCheckBox, QProgressDialog, QDialog, QPushButton, QSlider, QVBoxLayout, QHBoxLayout, QSpinBox
+    QComboBox, QCheckBox, QProgressDialog, QDialog, QPushButton, QSlider, QVBoxLayout, QHBoxLayout, QSpinBox,
+    QWidget, QSizePolicy
 )
 from PySide6.QtGui import QAction, QIcon, QPixmap, QColor, QBrush, QPen
 from PySide6.QtCore import Qt, QPoint, QRect, QSize, QRectF, QThread, Signal
@@ -137,29 +138,27 @@ class MainWindow(QMainWindow):
     def __init__(self, document_service: DocumentManagementService, redaction_service: RedactionService, settings_service: SettingsManagementService):
         super().__init__()
 
-        # print("[DEBUG] MainWindow: __init__ started") # Removed debug
-
         self.document_service = document_service
         self.redaction_service = redaction_service
         self.settings_service = settings_service
 
         self.setWindowTitle("PyRedactor")
         self.resize(1300, 900)
+        
+        # Load settings
+        self.settings = self.settings_service.load_settings()
+
+        # Apply settings
+        self.fill_color = self.settings.fill_color
+        self.output_quality = self.settings.output_quality
+        self.ocr_enabled = self.settings.ocr_enabled
+        self.selected_ocr_langs = [self.settings.ocr_language] if self.settings.ocr_language else ["eng"]
 
         # --- ModelWorker for background model operations ---
-        # Temporarily disable threading to fix issues
-        # self.model_thread = QThread()
         self.model_worker = ModelWorker()
         self.model_worker.document_service = self.document_service
-        # self.model_worker.moveToThread(self.model_thread)
-        # self.model_thread.start()
-        # self.model_worker.save_finished.connect(self.on_save_finished)
-        # self.model_worker.export_finished.connect(self.on_export_finished)
-        # self.model_worker.batch_update_finished.connect(self.on_batch_update_finished)
 
-        self.fill_color = '#000000'
-        self.output_quality = 'ebook'
-        self.history_length = 30
+        self.history_length = self.settings.history_length
         self.color_map = {
             "Black": "#000000", 
             "White": "#ffffff", 
@@ -181,9 +180,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.view)
 
         # OCR Settings
-        self.ocr_enabled = False
         self.available_ocr_langs = []
-        self.selected_ocr_langs = ["eng"]
         
         # Start loading languages in background
         self.lang_loader = OCRLanguageLoader()
@@ -206,6 +203,17 @@ class MainWindow(QMainWindow):
 
         self.setup_toolbar()
         self.update_status_bar()
+
+    def closeEvent(self, event):
+        # Save settings on exit
+        self.settings.fill_color = self.fill_color
+        self.settings.output_quality = self.output_quality
+        self.settings.ocr_enabled = self.ocr_enabled
+        if self.selected_ocr_langs:
+            self.settings.ocr_language = self.selected_ocr_langs[0]
+            
+        self.settings_service.save_settings(self.settings)
+        super().closeEvent(event)
 
     def on_languages_loaded(self, langs):
         """Callback when OCR languages are loaded"""
@@ -238,6 +246,27 @@ class MainWindow(QMainWindow):
         save_action.setStatusTip("Save redactions")
         save_action.triggered.connect(self.save_edited_document)
         toolbar.addAction(save_action)
+        
+        # Save As Action
+        save_as_action = QAction(QIcon.fromTheme("document-save-as"), "Save As", self)
+        save_as_action.setStatusTip("Save redactions as new file")
+        save_as_action.triggered.connect(self.save_as_edited_document)
+        toolbar.addAction(save_as_action)
+
+        toolbar.addSeparator()
+        
+        # Undo Action
+        undo_action = QAction(QIcon.fromTheme("edit-undo"), "Undo", self)
+        undo_action.setStatusTip("Undo last action")
+        undo_action.setShortcut("Ctrl+Z")
+        undo_action.triggered.connect(self.undo)
+        toolbar.addAction(undo_action)
+        
+        # Reset Document Action
+        reset_action = QAction(QIcon.fromTheme("view-refresh"), "Reset", self)
+        reset_action.setStatusTip("Reset document to original state")
+        reset_action.triggered.connect(self.reset_document)
+        toolbar.addAction(reset_action)
 
         toolbar.addSeparator()
 
@@ -290,10 +319,26 @@ class MainWindow(QMainWindow):
         
         self.color_combo = QComboBox()
         self.color_combo.addItems(list(self.color_map.keys()))
-        self.color_combo.setCurrentText("Black")
+        # Set current color based on settings
+        for name, hex_val in self.color_map.items():
+            if hex_val.lower() == self.fill_color.lower():
+                self.color_combo.setCurrentText(name)
+                break
         self.color_combo.currentTextChanged.connect(self.change_marker_color)
         toolbar.addWidget(self.color_combo)
 
+        toolbar.addSeparator()
+        
+        # Quality Selection
+        quality_label = QLabel("Quality: ")
+        toolbar.addWidget(quality_label)
+        
+        self.quality_combo = QComboBox()
+        self.quality_combo.addItems(["Screen", "Ebook", "Printer", "Prepress"])
+        self.quality_combo.setCurrentText(self.output_quality.capitalize())
+        self.quality_combo.currentTextChanged.connect(self.change_quality)
+        toolbar.addWidget(self.quality_combo)
+        
         toolbar.addSeparator()
 
         # OCR Toggle
@@ -337,6 +382,14 @@ class MainWindow(QMainWindow):
         crop_action.setStatusTip("Crop page")
         crop_action.triggered.connect(self.toggle_crop_tool)
         toolbar.addAction(crop_action)
+        
+        toolbar.addSeparator()
+        
+        # About Action
+        about_action = QAction(QIcon.fromTheme("help-about"), "About", self)
+        about_action.setStatusTip("About PyRedactor")
+        about_action.triggered.connect(self.about)
+        toolbar.addAction(about_action)
 
     def rotate_left(self):
         """Rotate current page 90 degrees counter-clockwise"""
@@ -537,6 +590,9 @@ class MainWindow(QMainWindow):
         if not page:
             return
             
+        # Push undo state before deletion
+        self.document_service.push_undo_state(document.current_page_index)
+            
         for item in selected_items:
             if isinstance(item, ResizableRectItem):
                 # Remove from model
@@ -566,6 +622,11 @@ class MainWindow(QMainWindow):
                             rect_entity = page.get_rectangle(item._entity_id)
                             if rect_entity:
                                 rect_entity.color = hex_color
+    
+    def change_quality(self, quality):
+        """Update export quality setting"""
+        self.output_quality = quality.lower()
+        self.statusBar().showMessage(f"Export quality set to: {quality}")
 
     def open_document(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -713,6 +774,9 @@ class MainWindow(QMainWindow):
         if document:
             page = document.get_current_page()
             if page:
+                # Push undo state
+                self.document_service.push_undo_state(document.current_page_index)
+                
                 self.redaction_service.clear_all_redactions(page)
                 self.show_page(document.current_page_index)
 
@@ -832,6 +896,29 @@ class MainWindow(QMainWindow):
             "Version 0.1.0\n"
             "Licensed under GPL V3.0\n\n"
             "©2025 Ernedin Zajko <ezajko@root.ba>")
+            
+    def undo(self):
+        """Undo last action (marker change, crop, rotate)"""
+        page_index = self.document_service.undo()
+        if page_index is not None:
+            self.show_page(page_index)
+            self.statusBar().showMessage("Undo successful")
+        else:
+            self.statusBar().showMessage("Nothing to undo")
+            
+    def reset_document(self):
+        """Reset document to original state (reload from disk)"""
+        document = self.document_service.get_current_document()
+        if document and document.file_path:
+            reply = QMessageBox.question(
+                self, "Reset Document",
+                "Are you sure you want to reset the document? All unsaved changes will be lost.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                self._load_document_threaded(document.file_path)
+        else:
+             QMessageBox.warning(self, "Reset Document", "No document loaded to reset.")
 
     def trigger_batch_marker_operation(self, update_func, operation_name="Batch Operation"):
         """

@@ -8,10 +8,12 @@ Document Management Service
 
 from typing import Optional, List
 import os
+import copy
 from ..interfaces.document_repository import DocumentRepositoryInterface
 from ..entities.document import DocumentEntity
 from ..entities.page import PageEntity
 from ..interfaces.ocr_service import OCRServiceInterface
+from PIL import Image
 
 
 class DocumentManagementService:
@@ -19,12 +21,14 @@ class DocumentManagementService:
         self.document_repository = document_repository
         self.ocr_service = ocr_service
         self._current_document: Optional[DocumentEntity] = None
+        self.undo_stack = []
 
     def load_document(self, file_path: str, progress_callback=None) -> Optional[DocumentEntity]:
         """
         Load a document from the file system.
         """
         self._current_document = self.document_repository.load_document(file_path, progress_callback)
+        self.undo_stack = [] # Clear undo stack on new document
         return self._current_document
 
     def save_document(self, document: DocumentEntity, file_path: str):
@@ -57,33 +61,72 @@ class DocumentManagementService:
             return True
         return False
         
+    def push_undo_state(self, page_index: int):
+        """Save current state of a page for undo"""
+        document = self.get_current_document()
+        if document and 0 <= page_index < len(document.pages):
+            page = document.pages[page_index]
+            
+            # Deep copy rectangles
+            rectangles_copy = copy.deepcopy(page.rectangles)
+            
+            # Copy image (PIL images are mutable, so copy is needed)
+            image_copy = page.image.copy() if page.image else None
+            
+            state = {
+                'page_index': page_index,
+                'image': image_copy,
+                'rectangles': rectangles_copy
+            }
+            
+            self.undo_stack.append(state)
+            
+            # Limit stack size
+            if len(self.undo_stack) > 10:
+                self.undo_stack.pop(0)
+
+    def undo(self) -> Optional[int]:
+        """Restore last state. Returns page_index of restored page or None."""
+        if not self.undo_stack:
+            return None
+            
+        state = self.undo_stack.pop()
+        page_index = state['page_index']
+        
+        document = self.get_current_document()
+        if document and 0 <= page_index < len(document.pages):
+            page = document.pages[page_index]
+            page.image = state['image']
+            page.rectangles = state['rectangles']
+            return page_index
+            
+        return None
+
     def rotate_page(self, document: DocumentEntity, page_index: int, angle: float):
         """
         Rotate the specified page by the given angle (degrees clockwise).
         Updates the page image and clears existing redactions on that page.
         """
         if 0 <= page_index < len(document.pages):
+            # Push undo state before modification
+            self.push_undo_state(page_index)
+            
             page = document.pages[page_index]
             if page.image:
-                # PIL rotate is counter-clockwise, so we negate the angle for clockwise behavior if needed.
-                # Standard "Rotate Right" is -90 (or 270) in PIL if we want visual CW.
-                # Let's stick to: angle > 0 is Counter-Clockwise (Standard math/PIL), 
-                # but UI usually says "Right" (CW) and "Left" (CCW).
-                # Let's assume input 'angle' is what we pass to PIL (CCW).
-                # Rotate with expand=True to resize canvas to fit new orientation
                 page.image = page.image.rotate(angle, expand=True, fillcolor="white")
-                
-                # Clear redactions as coordinates are now invalid
                 page.rectangles.clear()
-                
                 return True
         return False
 
     def crop_page(self, document: DocumentEntity, page_index: int, x: int, y: int, width: int, height: int):
         """
         Crop the specified page to the given rectangle.
+        If the cropped aspect ratio matches A4, upscale to standard A4 size (300 DPI).
         """
         if 0 <= page_index < len(document.pages):
+            # Push undo state before modification
+            self.push_undo_state(page_index)
+            
             page = document.pages[page_index]
             if page.image:
                 img_w, img_h = page.image.size
@@ -96,9 +139,30 @@ class DocumentManagementService:
                 
                 if width > 0 and height > 0:
                     try:
-                        page.image = page.image.crop((x, y, x + width, y + height))
+                        cropped_img = page.image.crop((x, y, x + width, y + height))
+                        
+                        # Check aspect ratio for A4 resizing
+                        ratio = width / height
+                        a4_ratio = 2480 / 3508 # ~0.707
+                        a4_landscape_ratio = 3508 / 2480 # ~1.414
+                        
+                        target_size = None
+                        
+                        # Allow 1% tolerance for aspect ratio matching
+                        if abs(ratio - a4_ratio) < 0.01 * a4_ratio:
+                             target_size = (2480, 3508)
+                        elif abs(ratio - a4_landscape_ratio) < 0.01 * a4_landscape_ratio:
+                             target_size = (3508, 2480)
+                        
+                        if target_size:
+                            cropped_img = cropped_img.resize(target_size, Image.Resampling.LANCZOS)
+                        
+                        page.image = cropped_img
                         page.rectangles.clear()
                         return True
                     except Exception as e:
                         print(f"Crop failed with exception: {e}")
+                        # If failed, pop the undo state we just pushed to avoid invalid state
+                        if self.undo_stack:
+                            self.undo_stack.pop()
         return False

@@ -287,7 +287,7 @@ class PhotoViewer(QGraphicsView):
                 return
 
             scene_rect = self.mapToScene(rect).boundingRect()
-            print(f"Debug: Creating marker at {scene_rect}")
+            # print(f"Debug: Creating marker at {scene_rect}")
             
             # Create redaction via service
             main_window = self.window()
@@ -297,6 +297,9 @@ class PhotoViewer(QGraphicsView):
                     page = document.get_current_page()
                     if page:
                         try:
+                            # Push undo state before modification
+                            main_window.document_service.push_undo_state(document.current_page_index)
+
                             # Add to model
                             new_rect = main_window.redaction_service.add_redaction_rectangle(
                                 page, 
