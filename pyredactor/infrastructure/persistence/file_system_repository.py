@@ -45,8 +45,10 @@ class FileSystemDocumentRepository(DocumentRepositoryInterface):
         self.enhancement_service = ImageEnhancementService() if ENHANCEMENT_AVAILABLE else None
         # Default paper format (can be made configurable later)
         self.default_paper_format = "a4"
-        # Enhancement settings (can be made configurable later)
-        self.enhancement_enabled = False
+        
+        # Enhancement settings
+        # If unpaper is missing (e.g. Windows), enable enhancement by default to improve quality
+        self.enhancement_enabled = not UNPAPER_AVAILABLE
         self.enhancement_brightness = 1.0
         self.enhancement_contrast = 1.0
         self.enhancement_sharpness = 1.0
