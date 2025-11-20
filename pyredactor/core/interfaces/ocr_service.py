@@ -18,7 +18,7 @@ class OCRServiceInterface(ABC):
     """Abstract interface for OCR service operations"""
     
     @abstractmethod
-    def process_page(self, page: PageEntity, lang: str, enabled: bool) -> Optional[bytes]:
+    def process_page(self, page: PageEntity, lang: str, enabled: bool, quality: str = "ebook") -> Optional[bytes]:
         """Process a page with OCR and return PDF bytes"""
         pass
     

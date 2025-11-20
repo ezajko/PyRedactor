@@ -55,13 +55,14 @@ class ExportWorker(QObject):
                 # Process page with OCR
                 ocr_enabled = self.settings.get("ocr_enabled", True)
                 ocr_lang = self.settings.get("ocr_lang", "eng")
+                quality = self.settings.get("output_quality", "ebook")
 
                 if ocr_enabled:
                     self.progress_update.emit(f"Processing page {i+1} of {total_pages} - running OCR ({ocr_lang})...", creation_progress + 2)
                 else:
                     self.progress_update.emit(f"Processing page {i+1} of {total_pages} - preparing page...", creation_progress + 2)
 
-                pdf_page = self.document_service.ocr_service.process_page(page, ocr_lang, ocr_enabled)
+                pdf_page = self.document_service.ocr_service.process_page(page, ocr_lang, ocr_enabled, quality)
 
                 if pdf_page:
                     merger.append(io.BytesIO(pdf_page))
