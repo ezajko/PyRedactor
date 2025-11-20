@@ -282,12 +282,11 @@ class PhotoViewer(QGraphicsView):
             
             # Ensure rect has some size
             if rect.width() < 5 or rect.height() < 5:
-                print("Debug: Rect too small, ignoring")
+                # Too small, ignore
                 super().mouseReleaseEvent(event)
                 return
 
             scene_rect = self.mapToScene(rect).boundingRect()
-            # print(f"Debug: Creating marker at {scene_rect}")
             
             # Create redaction via service
             main_window = self.window()
@@ -320,9 +319,9 @@ class PhotoViewer(QGraphicsView):
                                 
                                 main_window.update_status_bar()
                             else:
-                                print("Error: Failed to create redaction rectangle in model")
+                                pass # Failed to create
                         except Exception as e:
-                            print(f"Error creating marker: {e}")
+                            pass # Error creating marker
 
         super().mouseReleaseEvent(event)
 
