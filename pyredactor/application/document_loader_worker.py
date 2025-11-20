@@ -8,9 +8,9 @@ Document Loader Worker for PyRedactor Application
 Handles document loading operations in a background thread with progress updates.
 """
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, Signal, Slot, QThread
 from PIL.ImageQt import ImageQt
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QImage
 
 class DocumentLoaderWorker(QObject):
     """
@@ -20,7 +20,7 @@ class DocumentLoaderWorker(QObject):
 
     # Progress signals
     progress_update = Signal(str, int)  # (message, percentage)
-    page_loaded = Signal(object, int)   # (thumbnail_pixmap, page_index)
+    page_loaded = Signal(object, int)   # (thumbnail_qimage, page_index)
     finished = Signal(object)           # (document)
     error = Signal(str)                 # (error_message)
 
@@ -91,7 +91,16 @@ class DocumentLoaderWorker(QObject):
                 if page.image:
                     thumbnail = page.image.copy()
                     thumbnail.thumbnail((100, 100))
-                    self.page_loaded.emit(thumbnail, i)
+                    
+                    # Convert to QImage in worker thread to save main thread time
+                    # ImageQt returns a QImage wrapper around PIL image
+                    # We copy it to detach from PIL image and ensure it's a pure Qt object
+                    q_image = ImageQt(thumbnail).copy()
+                    
+                    self.page_loaded.emit(q_image, i)
+                
+                # Small sleep to prevent flooding the event loop and allow UI updates
+                QThread.msleep(10)
 
             self.progress_update.emit("Document processing completed successfully!", 100)
             self.finished.emit(document)

@@ -674,10 +674,10 @@ class MainWindow(QMainWindow):
             self._load_progress_dialog.setValue(percentage)
         self.statusBar().showMessage(message)
 
-    def _on_page_thumbnail_loaded(self, thumbnail_image, page_index):
+    def _on_page_thumbnail_loaded(self, thumbnail_qimage, page_index):
         # Add thumbnail to list widget
-        if thumbnail_image:
-            icon = QIcon(QPixmap.fromImage(ImageQt(thumbnail_image)))
+        if thumbnail_qimage:
+            icon = QIcon(QPixmap.fromImage(thumbnail_qimage))
             item = QListWidgetItem(icon, f"Page {page_index + 1}")
             self.page_list.addItem(item)
 
@@ -798,37 +798,33 @@ class MainWindow(QMainWindow):
         # Use threaded export with progress dialog
         self._export_document_threaded(save_file_path)
 
-    def _export_document_threaded(self, save_file_path):
-        """Export document using background thread with enhanced progress dialog"""
+    def save_as_edited_document(self):
         document = self.document_service.get_current_document()
         if not document:
+            QMessageBox.warning(self, "Save Document", "No document to save.")
             return
 
-        # Create enhanced progress dialog
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Save As", "", "PDF Files (*.pdf)"
+        )
+        if file_path:
+            if not file_path.lower().endswith(".pdf"):
+                file_path += ".pdf"
+            self._export_document_threaded(file_path)
+
+    def _export_document_threaded(self, file_path):
+        # Create progress dialog
         self._export_progress_dialog = QProgressDialog("Exporting document...", "Cancel", 0, 100, self)
         self._export_progress_dialog.setWindowModality(Qt.WindowModal)
-        self._export_progress_dialog.setWindowTitle("Export Progress")
-        self._export_progress_dialog.setMinimumDuration(0)  # Show immediately
+        self._export_progress_dialog.setWindowTitle("Exporting")
+        self._export_progress_dialog.setMinimumDuration(0)
         self._export_progress_dialog.setAutoClose(False)
         self._export_progress_dialog.setAutoReset(False)
-        self._export_progress_dialog.setFixedSize(400, 120)  # Fixed size for better appearance
+        self._export_progress_dialog.setFixedSize(400, 120)
 
         # Create worker and thread
-        settings = {
-            "ocr_enabled": self.ocr_enabled,
-            "ocr_lang": "+".join(self.selected_ocr_langs), # Combine selected languages
-            "output_quality": self.output_quality
-        }
-
         self.export_thread = QThread()
-        self.export_worker = ExportWorker(
-            self.document_service,
-            document,
-            save_file_path,
-            settings
-        )
-
-        # Move worker to thread
+        self.export_worker = ExportWorker(self.document_service, self.document_service.get_current_document(), file_path, self.settings.__dict__)
         self.export_worker.moveToThread(self.export_thread)
 
         # Connect signals
@@ -836,69 +832,42 @@ class MainWindow(QMainWindow):
         self.export_worker.progress_update.connect(self._update_export_progress)
         self.export_worker.finished.connect(self._on_export_finished)
         self.export_worker.error.connect(self._on_export_error)
+        
+        # Cleanup
         self.export_worker.finished.connect(self.export_thread.quit)
         self.export_worker.finished.connect(self.export_worker.deleteLater)
         self.export_thread.finished.connect(self.export_thread.deleteLater)
         self._export_progress_dialog.canceled.connect(self.export_worker.cancel)
 
-        # Start the export
+        # Start
         self.export_thread.start()
         self._export_progress_dialog.show()
 
     def _update_export_progress(self, message, percentage):
-        """Update export progress dialog and status bar"""
         if hasattr(self, '_export_progress_dialog'):
             self._export_progress_dialog.setLabelText(message)
             self._export_progress_dialog.setValue(percentage)
-            # Update status bar with current operation
-            self.statusBar().showMessage(f"Exporting: {message}")
+        self.statusBar().showMessage(message)
 
     def _on_export_finished(self, success, message, file_path):
-        """Handle export completion"""
-        # Close progress dialog
         if hasattr(self, '_export_progress_dialog'):
             self._export_progress_dialog.close()
             delattr(self, '_export_progress_dialog')
-
-        # Show result message
+        
         if success:
-            QMessageBox.information(self, "Export Successful", message)
+            QMessageBox.information(self, "Export Complete", message)
         else:
-            QMessageBox.critical(self, "Export Failed", message)
+            if message != "Export cancelled by user":
+                QMessageBox.warning(self, "Export Failed", message)
 
     def _on_export_error(self, error_message):
-        """Handle export errors"""
         if hasattr(self, '_export_progress_dialog'):
             self._export_progress_dialog.close()
             delattr(self, '_export_progress_dialog')
-        QMessageBox.critical(self, "Export Error", f"An error occurred during export:\n{error_message}")
+        QMessageBox.critical(self, "Export Error", f"An error occurred: {error_message}")
 
-    def save_as_edited_document(self):
-        document = self.document_service.get_current_document()
-        if not document:
-            QMessageBox.warning(self, "Save Document As", "No document to save.")
-            return
-
-        suggested_filename = "redacted_document.pdf"
-        if document.file_path:
-            base_name = os.path.splitext(os.path.basename(document.file_path))[0]
-            suggested_filename = f"{base_name}.Redacted.pdf"
-
-        save_file_path, _ = QFileDialog.getSaveFileName(
-            self, "Save Document As", suggested_filename, "PDF Files (*.pdf)"
-        )
-        if save_file_path:
-            self._export_document_threaded(save_file_path)
-
-    def about(self):
-        QMessageBox.about(self, "About PyRedactor",
-            "PyRedactor PDF Redaction Software\n\n"
-            "Version 0.1.0\n"
-            "Licensed under GPL V3.0\n\n"
-            "©2025 Ernedin Zajko <ezajko@root.ba>")
-            
     def undo(self):
-        """Undo last action (marker change, crop, rotate)"""
+        """Undo last action"""
         page_index = self.document_service.undo()
         if page_index is not None:
             self.show_page(page_index)
@@ -907,169 +876,29 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Nothing to undo")
             
     def reset_document(self):
-        """Reset document to original state (reload from disk)"""
+        """Reset document to original state"""
         document = self.document_service.get_current_document()
-        if document and document.file_path:
-            reply = QMessageBox.question(
-                self, "Reset Document",
-                "Are you sure you want to reset the document? All unsaved changes will be lost.",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-            )
-            if reply == QMessageBox.Yes:
-                self._load_document_threaded(document.file_path)
-        else:
-             QMessageBox.warning(self, "Reset Document", "No document loaded to reset.")
-
-    def trigger_batch_marker_operation(self, update_func, operation_name="Batch Operation"):
-        """
-        Trigger a batch marker/model operation in the background using BatchOperationWorker.
-        update_func should be a callable that takes the document and performs updates.
-        """
-        document = self.document_service.get_current_document()
-        if not document:
-            QMessageBox.warning(self, "Batch Operation", "No document loaded.")
+        if not document or not document.file_path:
             return
-
-        # Create enhanced progress dialog
-        self._batch_progress_dialog = QProgressDialog(f"{operation_name} in progress...", "Cancel", 0, 100, self)
-        self._batch_progress_dialog.setWindowModality(Qt.WindowModal)
-        self._batch_progress_dialog.setWindowTitle(operation_name)
-        self._batch_progress_dialog.setMinimumDuration(0)
-        self._batch_progress_dialog.setAutoClose(False)
-        self._batch_progress_dialog.setAutoReset(False)
-        self._batch_progress_dialog.setFixedSize(400, 120)  # Fixed size for better appearance
-
-        # Create worker and thread
-        self.batch_thread = QThread()
-        self.batch_worker = BatchOperationWorker(document, update_func, operation_name)
-
-        # Move worker to thread
-        self.batch_worker.moveToThread(self.batch_thread)
-
-        # Connect signals
-        self.batch_thread.started.connect(self.batch_worker.execute_batch_operation)
-        self.batch_worker.progress_update.connect(self._update_batch_progress)
-        self.batch_worker.finished.connect(self._on_batch_finished)
-        self.batch_worker.error.connect(self._on_batch_error)
-        self.batch_worker.finished.connect(self.batch_thread.quit)
-        self.batch_worker.finished.connect(self.batch_worker.deleteLater)
-        self.batch_thread.finished.connect(self.batch_thread.deleteLater)
-        self._batch_progress_dialog.canceled.connect(self.batch_worker.cancel)
-
-        # Start the batch operation
-        self.batch_thread.start()
-        self._batch_progress_dialog.show()
-
-    def _update_batch_progress(self, message, percentage):
-        """Update batch operation progress dialog and status bar"""
-        if hasattr(self, '_batch_progress_dialog'):
-            self._batch_progress_dialog.setLabelText(message)
-            self._batch_progress_dialog.setValue(percentage)
-            # Update status bar with current operation
-            self.statusBar().showMessage(f"Batch Operation: {message}")
-
-    def _on_batch_finished(self, success, message):
-        """Handle batch operation completion"""
-        # Close progress dialog
-        if hasattr(self, '_batch_progress_dialog'):
-            self._batch_progress_dialog.close()
-            delattr(self, '_batch_progress_dialog')
-
-        # Show result message
-        if success:
-            QMessageBox.information(self, "Batch Operation", message)
-            # Optionally refresh the UI
-            document = self.document_service.get_current_document()
-            if document:
-                self.show_page(document.current_page_index)
-        else:
-            QMessageBox.critical(self, "Batch Operation", message)
-
-    def _on_batch_error(self, error_message):
-        """Handle batch operation errors"""
-        if hasattr(self, '_batch_progress_dialog'):
-            self._batch_progress_dialog.close()
-            delattr(self, '_batch_progress_dialog')
-        QMessageBox.critical(self, "Batch Operation Error", f"An error occurred during batch operation:\n{error_message}")
-
-    def on_batch_update_finished(self, success, message):
-        if success:
-            QMessageBox.information(self, "Batch Operation", message)
-            # Optionally refresh the UI
-            self.show_page(self.document_service.get_current_document().current_page_index)
-        else:
-            QMessageBox.critical(self, "Batch Operation", message)
-
-    def on_save_finished(self, success, message):
-        if success:
-            QMessageBox.information(self, "Save Document", message)
-        else:
-            QMessageBox.critical(self, "Save Document", message)
-
-    def on_export_finished(self, success, message):
-        if success:
-            QMessageBox.information(self, "Export PDF", message)
-        else:
-            QMessageBox.critical(self, "Export PDF", message)
-
-    def toggle_enhancement_options(self):
-        """Toggle image enhancement options dialog"""
-        from .dialogs.enhancement_options_dialog import EnhancementOptionsDialog
-
-        dialog = EnhancementOptionsDialog(
+            
+        reply = QMessageBox.question(
             self,
-            enhancement_enabled=self.enhancement_enabled,
-            brightness=self.enhancement_brightness,
-            contrast=self.enhancement_contrast,
-            sharpness=self.enhancement_sharpness,
-            auto_level=self.enhancement_auto_level,
-            deskew=self.enhancement_deskew,
-            denoise=self.enhancement_denoise
+            "Reset Document",
+            "Are you sure you want to reset the document? All changes will be lost.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
         )
+        
+        if reply == QMessageBox.Yes:
+            self._load_document_threaded(document.file_path)
 
-        if dialog.exec() == QDialog.Accepted:
-            values = dialog.get_values()
-            self.enhancement_enabled = values["enhancement_enabled"]
-            self.enhancement_brightness = values["brightness"]
-            self.enhancement_contrast = values["contrast"]
-            self.enhancement_sharpness = values["sharpness"]
-            self.enhancement_auto_level = values["auto_level"]
-            self.enhancement_deskew = values["deskew"]
-            self.enhancement_denoise = values["denoise"]
-
-            # Pass settings to document repository
-            if hasattr(self.document_service, "document_repository"):
-                self.document_service.document_repository.set_enhancement_settings(
-                    enabled=self.enhancement_enabled,
-                    brightness=self.enhancement_brightness,
-                    contrast=self.enhancement_contrast,
-                    sharpness=self.enhancement_sharpness,
-                    auto_level=self.enhancement_auto_level,
-                    deskew=self.enhancement_deskew,
-                    denoise=self.enhancement_denoise
-                )
-
-            # Show status message
-            if self.enhancement_enabled:
-                self.statusBar().showMessage("Image enhancement enabled")
-            else:
-                self.statusBar().showMessage("Image enhancement disabled")
-
-            # Ask to reload if document is open
-            document = self.document_service.get_current_document()
-            if document and document.file_path:
-                reply = QMessageBox.question(
-                    self, 
-                    "Reload Document?",
-                    "Enhancement settings have changed. Do you want to reload the document to apply them?\n\n"
-                    "Note: This will clear current markers.",
-                    QMessageBox.Yes | QMessageBox.No, 
-                    QMessageBox.Yes
-                )
-                
-                if reply == QMessageBox.Yes:
-                    self._load_document_threaded(document.file_path)
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    sys.exit(app.exec())
+    def about(self):
+        """Show about dialog"""
+        QMessageBox.about(
+            self,
+            "About PyRedactor",
+            "<h3>PyRedactor</h3>"
+            "<p>A secure PDF redaction tool.</p>"
+            "<p>Version 1.0.0</p>"
+            "<p>(c) 2025 Ernedin Zajko</p>"
+        )
