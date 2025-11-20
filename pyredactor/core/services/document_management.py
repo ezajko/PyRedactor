@@ -146,15 +146,23 @@ class DocumentManagementService:
                         a4_ratio = 2480 / 3508 # ~0.707
                         a4_landscape_ratio = 3508 / 2480 # ~1.414
                         
+                        print(f"DEBUG: Crop w={width}, h={height}, ratio={ratio:.4f}")
+                        print(f"DEBUG: A4 Portrait diff={abs(ratio - a4_ratio):.4f}, A4 Landscape diff={abs(ratio - a4_landscape_ratio):.4f}")
+
                         target_size = None
                         
-                        # Allow 1% tolerance for aspect ratio matching
-                        if abs(ratio - a4_ratio) < 0.01 * a4_ratio:
+                        # Allow 5% tolerance for aspect ratio matching to account for manual drag imprecision
+                        if abs(ratio - a4_ratio) < 0.05 * a4_ratio:
+                             print("DEBUG: Detected A4 Portrait match. Upscaling...")
                              target_size = (2480, 3508)
-                        elif abs(ratio - a4_landscape_ratio) < 0.01 * a4_landscape_ratio:
+                        elif abs(ratio - a4_landscape_ratio) < 0.05 * a4_landscape_ratio:
+                             print("DEBUG: Detected A4 Landscape match. Upscaling...")
                              target_size = (3508, 2480)
+                        else:
+                             print("DEBUG: No A4 match detected.")
                         
                         if target_size:
+                            # Use LANCZOS for high quality downscaling/upscaling
                             cropped_img = cropped_img.resize(target_size, Image.Resampling.LANCZOS)
                         
                         page.image = cropped_img
