@@ -82,6 +82,29 @@ PyRedactor is a powerful, open-source PDF redaction tool built with Python and P
     pip install -r requirements.txt
     ```
 
+### Running on Windows
+
+**Option 1: Using the Batch File (Recommended)**
+We have included a `run_windows.bat` file for convenience.
+1.  Double-click `run_windows.bat` to start the application.
+
+**Option 2: Command Line**
+```powershell
+.\venv\Scripts\pythonw -m pyredactor.main
+```
+
+### Creating a Desktop Shortcut (Windows)
+
+To create a clickable icon on your Desktop:
+
+1.  Locate `run_windows.bat` in the project folder.
+2.  **Right-click** on it.
+3.  Select **Send to** > **Desktop (create shortcut)**.
+4.  (Optional) To change the icon:
+    *   Right-click the new shortcut on your Desktop.
+    *   Select **Properties**.
+    *   Click **Change Icon...** and select an icon of your choice.
+
 ## Usage
 
 1.  **Activate the Virtual Environment** (if not already active).
