@@ -55,7 +55,9 @@ PyRedactor is a powerful, open-source PDF redaction tool built with Python and P
     pip install -r requirements.txt
     ```
 
-### Windows
+### Windows (Experimental)
+
+**⚠️ Disclaimer:** Windows support is currently **experimental** and has not been extensively tested. The output quality and performance may not be on par with the Linux version due to the lack of native `unpaper` support and other system-specific differences. Use at your own risk.
 
 1.  **Install Python:**
     Download and install Python from [python.org](https://www.python.org/downloads/). Ensure you check "Add Python to PATH" during installation.
