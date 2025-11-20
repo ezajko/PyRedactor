@@ -9,7 +9,7 @@ PyRedactor is a powerful, open-source PDF redaction tool built with Python and P
 *   **OCR Support**: Optional Optical Character Recognition (OCR) using Tesseract to make redacted PDFs searchable.
 *   **Page Manipulation**: Rotate pages (Left, Right, Fine Rotation) and Crop pages.
 *   **Smart Cropping**: Automatically upscales cropped areas to A4 standard size if the aspect ratio matches.
-*   **Image Enhancement**: Adjust brightness, contrast, sharpness, and apply deskewing/denoising (requires `unpaper` on Linux).
+*   **Image Enhancement**: Adjust brightness, contrast, sharpness, and apply deskewing/denoising. Automatically uses `unpaper` if available (Linux), or falls back to built-in OpenCV enhancement (Windows/Linux) for consistent quality.
 *   **Undo/Redo**: Undo support for marker placement, rotation, and cropping.
 *   **Customizable**: Change marker colors, export quality, and UI settings.
 
