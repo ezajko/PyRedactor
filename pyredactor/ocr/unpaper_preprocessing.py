@@ -101,7 +101,7 @@ class UnpaperPreprocessingService:
 
             try:
                 # Save input image
-                image.save(input_path, PNG)
+                image.save(input_path, "PNG")
 
                 # Process with unpaper
                 if self.preprocess_image(input_path, output_path, paper_format):
