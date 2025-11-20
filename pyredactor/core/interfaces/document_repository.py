@@ -19,7 +19,7 @@ class DocumentRepositoryInterface(ABC):
     """Abstract interface for document repository operations"""
     
     @abstractmethod
-    def load_document(self, file_path: str) -> Optional[DocumentEntity]:
+    def load_document(self, file_path: str, progress_callback=None) -> Optional[DocumentEntity]:
         """Load a document from file path"""
         pass
     

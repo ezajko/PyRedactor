@@ -27,7 +27,7 @@ class RedactionService:
         start_point: Tuple[float, float], 
         end_point: Tuple[float, float], 
         color: str = "black"
-    ) -> bool:
+    ) -> Optional[RectangleEntity]:
         """Add a redaction rectangle to a page"""
         try:
             rectangle = RectangleEntity(
@@ -36,9 +36,11 @@ class RedactionService:
                 end_point=end_point,
                 color=color
             )
-            return page.add_rectangle(rectangle)
+            if page.add_rectangle(rectangle):
+                return rectangle
+            return None
         except Exception:
-            return False
+            return None
     
     def remove_redaction_rectangle(self, page: PageEntity, rectangle_id: str) -> bool:
         """Remove a redaction rectangle from a page"""

@@ -42,622 +42,400 @@ class MainWindow(QMainWindow):
     def __init__(self, document_service: DocumentManagementService, redaction_service: RedactionService, settings_service: SettingsManagementService):
         super().__init__()
 
-        print("[DEBUG] MainWindow: __init__ started")
+    print("[DEBUG] MainWindow: __init__ started")
 
-        self.document_service = document_service
-        self.redaction_service = redaction_service
-        self.settings_service = settings_service
+    self.document_service = document_service
+    self.redaction_service = redaction_service
+    self.settings_service = settings_service
 
-        self.setWindowTitle("PyRedactor")
-        self.resize(1300, 900)
+    self.setWindowTitle("PyRedactor")
+    self.resize(1300, 900)
 
-        # --- ModelWorker for background model operations ---
-        # Temporarily disable threading to fix issues
-        # self.model_thread = QThread()
-        self.model_worker = ModelWorker()
-        self.model_worker.document_service = self.document_service
-        # self.model_worker.moveToThread(self.model_thread)
-        # self.model_thread.start()
-        # self.model_worker.save_finished.connect(self.on_save_finished)
-        # self.model_worker.export_finished.connect(self.on_export_finished)
-        # self.model_worker.batch_update_finished.connect(self.on_batch_update_finished)
+    # --- ModelWorker for background model operations ---
+    # Temporarily disable threading to fix issues
+    # self.model_thread = QThread()
+    self.model_worker = ModelWorker()
+    self.model_worker.document_service = self.document_service
+    # self.model_worker.moveToThread(self.model_thread)
+    # self.model_thread.start()
+    # self.model_worker.save_finished.connect(self.on_save_finished)
+    # self.model_worker.export_finished.connect(self.on_export_finished)
+    # self.model_worker.batch_update_finished.connect(self.on_batch_update_finished)
 
-        self.fill_color = 'black'
-        self.output_quality = 'ebook'
-        self.history_length = 30
-        self.color_list = ["#000000", "#ffffff", "#ff0000", "#00ff00"] # Black, White, Red, Green (hex codes)
+    self.fill_color = 'black'
+    self.output_quality = 'ebook'
+    self.history_length = 30
+    self.color_list = ["#000000", "#ffffff", "#ff0000", "#00ff00"] # Black, White, Red, Green (hex codes)
 
-        self.page_list = QListWidget()
-        self.scene = QGraphicsScene()
-        self.view = PhotoViewer(self)
-        self.view.setScene(self.scene)
+    self.page_list = QListWidget()
+    self.scene = QGraphicsScene()
+    self.view = PhotoViewer(self)
+    self.view.setScene(self.scene)
 
-        self.ocr_enabled = True
+    self.ocr_enabled = True
 
-        print("[DEBUG] MainWindow: UI widgets created")
+    # Image enhancement options
+    self.enhancement_enabled = False
+    self.enhancement_brightness = 1.0
+    self.enhancement_contrast = 1.0
+    self.enhancement_sharpness = 1.0
+    self.enhancement_auto_level = True
+    self.enhancement_deskew = True
+    self.enhancement_denoise = True
 
-        # Temporarily disable OCR language detection to avoid hangs
+        # TEMPORARILY DISABLED OCR LANGUAGE DETECTION TO AVOID HANGS
         # available_langs = self.get_available_ocr_languages()
         available_langs = ["eng"]  # Default to English
+        
         if available_langs:
-            self.ocr_lang = os.getenv('PYREDACTOR_OCR_LANG', available_langs[0])
-            if self.ocr_lang not in available_langs:
-                self.ocr_lang = available_langs[0]
+            self.ocr_lang = available_langs[0]
         else:
             self.ocr_lang = "eng"
-
-        print("[DEBUG] MainWindow: Calling _create_toolbar()")
-        self._create_toolbar()
-        print("[DEBUG] MainWindow: Toolbar created")
-
-        print("[DEBUG] MainWindow: Setting central widget")
-        self.setCentralWidget(self.view)
-
-        print("[DEBUG] MainWindow: Creating page browser")
-        self._create_page_browser()
-
-        print("[DEBUG] MainWindow: Setting status bar")
-        self.setStatusBar(QStatusBar(self))
-
-        print("[DEBUG] MainWindow: Updating status bar")
-        self.update_status_bar()
-
-        print("[DEBUG] MainWindow: __init__ finished")
-
-
-
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Delete or event.key() == Qt.Key_D:
-            selected_items = self.scene.selectedItems()
-            for item in selected_items:
-                if isinstance(item, ResizableRectItem):
-                    # Remove from scene
-                    self.scene.removeItem(item)
-                    print(f"[DEBUG] MainWindow: Deleted marker from scene (ID: {item._entity_id})")
-
-                    # Remove from document data
-                    document = self.document_service.get_current_document()
-                    if document:
-                        page = document.get_current_page()
-                        if page:
-                            self.redaction_service.remove_redaction_rectangle(page, item._entity_id)
-                            print(f"[DEBUG] MainWindow: Deleted marker from document data (ID: {item._entity_id})")
-            self.scene.update() # Force repaint
-        elif event.key() == Qt.Key_C:
-            selected_items = self.scene.selectedItems()
-            for item in selected_items:
-                if isinstance(item, ResizableRectItem):
-                    current_color_index = (self.color_list.index(item.brush().color().name()) + 1) % len(self.color_list)
-                    new_color_name = self.color_list[current_color_index]
-                    new_color = QColor(new_color_name)
-
-                    item.setBrush(QBrush(new_color)) # Apply new color to scene item
-                    print(f"[DEBUG] MainWindow: Changed marker color to {new_color_name} (ID: {item._entity_id})")
-
-                    # Update document data
-                    document = self.document_service.get_current_document()
-                    if document:
-                        page = document.get_current_page()
-                        if page:
-                            self.redaction_service.change_redaction_color(page, item._entity_id, new_color_name)
-                            print(f"[DEBUG] MainWindow: Updated marker color in document data (ID: {item._entity_id})")
-            self.scene.update() # Force repaint
-        elif event.key() in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
-            selected_items = self.scene.selectedItems()
-            for item in selected_items:
-                if isinstance(item, ResizableRectItem):
-                    delta_x = 0
-                    delta_y = 0
-                    step = 1 # Move by 1 pixel
-
-                    if event.key() == Qt.Key_Up:
-                        delta_y = -step
-                    elif event.key() == Qt.Key_Down:
-                        delta_y = step
-                    elif event.key() == Qt.Key_Left:
-                        delta_x = -step
-                    elif event.key() == Qt.Key_Right:
-                        delta_x = step
-
-                    # Move in UI
-                    item.setPos(item.pos().x() + delta_x, item.pos().y() + delta_y)
-                    print(f"[DEBUG] MainWindow: Moved marker (ID: {item._entity_id}) in UI by ({delta_x}, {delta_y})")
-
-                    # Update document data
-                    document = self.document_service.get_current_document()
-                    if document:
-                        page = document.get_current_page()
-                        if page:
-                            # Update the model to match the new position
-                            rect = item.rect()
-                            pos = item.pos()
-                            start_point = (rect.topLeft().x() + pos.x(), rect.topLeft().y() + pos.y())
-                            end_point = (rect.bottomRight().x() + pos.x(), rect.bottomRight().y() + pos.y())
-                            rectangle_entity = page.get_rectangle(item._entity_id)
-                            if rectangle_entity:
-                                rectangle_entity.start_point = start_point
-                                rectangle_entity.end_point = end_point
-                            print(f"[DEBUG] MainWindow: Updated marker position in document data (ID: {item._entity_id})")
-            self.scene.update() # Force repaint
-        super().keyPressEvent(event)
-
-    def _create_toolbar(self):
-        print("[DEBUG] MainWindow: _create_toolbar started")
-        toolbar = QToolBar("Main Toolbar")
-        toolbar.setIconSize(QSize(32, 32))
-        toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        toolbar.layout().setSpacing(10)
-        self.addToolBar(toolbar)
-        print("[DEBUG] MainWindow: Toolbar created")
-
-        open_action = QAction(get_icon_from_theme("document-open", "open"), "Open", self)
-        open_action.triggered.connect(self.open_file)
-
-        save_action = QAction(get_icon_from_theme("document-save", "save"), "Save", self)
-        save_action.triggered.connect(self.save_edited_document)
-
-        save_as_action = QAction(get_icon_from_theme("document-save-as", "save_as"), "Save As", self)
-        save_as_action.triggered.connect(self.save_as_edited_document)
-
-        delete_all_action = QAction(get_icon_from_theme("edit-delete", "delete"), "Delete All", self)
-        delete_all_action.triggered.connect(self.delete_all)
-
-        prev_page_action = QAction(get_icon_from_theme("go-previous", "prev_page"), "Previous", self)
-        prev_page_action.triggered.connect(self.prev_page)
-
-        next_page_action = QAction(get_icon_from_theme("go-next", "next_page"), "Next", self)
-        next_page_action.triggered.connect(self.next_page)
-
-        zoom_in_action = QAction(get_icon_from_theme("zoom-in", "zoom_in"), "Zoom In", self)
-        zoom_in_action.triggered.connect(self.zoom_in)
-
-        zoom_out_action = QAction(get_icon_from_theme("zoom-out", "zoom_out"), "Zoom Out", self)
-        zoom_out_action.triggered.connect(self.zoom_out)
-
-        quit_action = QAction(get_icon_from_theme("application-exit", "quit"), "Quit", self)
-        quit_action.triggered.connect(self.close)
-
-        about_action = QAction(get_icon_from_theme("help-about", "about"), "About", self)
-        about_action.triggered.connect(self.about)
-
-        toolbar.addAction(open_action)
-        toolbar.addAction(save_action)
-        toolbar.addAction(save_as_action)
-        toolbar.addSeparator()
-        toolbar.addAction(delete_all_action)
-        toolbar.addSeparator()
-        toolbar.addAction(prev_page_action)
-        toolbar.addAction(next_page_action)
-        toolbar.addSeparator()
-        toolbar.addAction(zoom_in_action)
-        toolbar.addAction(zoom_out_action)
-        toolbar.addSeparator()
-
-        self.quality_combo = QComboBox()
-        self.quality_combo.addItems(["screen", "ebook", "printer", "prepress"])
-        self.quality_combo.setCurrentText(self.output_quality)
-        self.quality_combo.currentTextChanged.connect(self.quality_changed)
-        self.quality_combo.setMinimumHeight(32)
-        toolbar.addWidget(self.quality_combo)
-        toolbar.addSeparator()
-
-        self.ocr_checkbox = QCheckBox("Enable OCR")
-        self.ocr_checkbox.setChecked(self.ocr_enabled)
-        self.ocr_checkbox.stateChanged.connect(self.ocr_enabled_changed)
-        self.ocr_checkbox.setStyleSheet("QCheckBox { height: 32px; }")
-        toolbar.addWidget(self.ocr_checkbox)
-
-        self.ocr_lang_combo = QComboBox()
-        available_langs = self.get_available_ocr_languages()
-        if available_langs:
-            self.ocr_lang_combo.addItems(available_langs)
-            default_lang = self.ocr_lang if self.ocr_lang in available_langs else available_langs[0]
-            self.ocr_lang_combo.setCurrentText(default_lang)
-        else:
-            self.ocr_lang_combo.addItems(["No languages found"])
-            self.ocr_lang_combo.setEnabled(False)
-            self.ocr_checkbox.setChecked(False)
-            self.ocr_checkbox.setEnabled(False)
-        self.ocr_lang_combo.currentTextChanged.connect(self.ocr_lang_changed)
-        self.ocr_lang_combo.setMinimumHeight(32)
-        toolbar.addWidget(self.ocr_lang_combo)
-        toolbar.addSeparator()
-
-        toolbar.addAction(quit_action)
-        toolbar.addSeparator()
-        toolbar.addAction(about_action)
-        print("[DEBUG] MainWindow: _create_toolbar finished")
-
-    def _create_page_browser(self):
-        self.page_browser_dock = QDockWidget("Page Browser", self)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.page_browser_dock)
-        self.page_browser_dock.setWidget(self.page_list)
-        self.page_list.itemClicked.connect(self.on_page_selected)
-        self.page_browser_dock.show()
-        self.page_browser_dock.setFloating(False)
-        self.page_browser_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
-
-    def get_available_ocr_languages(self):
-        return self.document_service.ocr_service.get_available_languages()
-
-    def ocr_lang_changed(self, lang):
-        self.ocr_lang = lang
-
-    def ocr_enabled_changed(self, state):
-        self.ocr_enabled = state == Qt.Checked
-
-    def quality_changed(self, quality):
-        self.output_quality = quality
-
-
-
-    def open_file(self, file_path: str = None):
-        if not file_path:
-            documents_path = os.path.expanduser("~/Documents")
-            if not os.path.exists(documents_path):
-                documents_path = os.path.expanduser("~")
-
-            file_path, _ = QFileDialog.getOpenFileName(
-                self, "Open File", documents_path, "PDF Files (*.pdf);;Image Files (*.png *.jpg *.bmp)"
-            )
-
-        if file_path:
-            # Use threaded document loading with progress dialog
-            self._load_document_threaded(file_path)
-
-    def _load_document_threaded(self, file_path):
-        """Load document using background thread with progress dialog"""
-        from ..application.document_loader_worker import DocumentLoaderWorker
-
-        # Create progress dialog
-        self._load_progress_dialog = QProgressDialog(f"Loading file: {os.path.basename(file_path)}", "Cancel", 0, 100, self)
-        self._load_progress_dialog.setWindowModality(Qt.WindowModal)
-        self._load_progress_dialog.setWindowTitle(f"Loading: {os.path.basename(file_path)}")
-        self._load_progress_dialog.setMinimumDuration(0)
-        self._load_progress_dialog.setAutoClose(False)
-        self._load_progress_dialog.setAutoReset(False)
-
-        # Create worker and thread
-        self.loader_thread = QThread()
-        self.loader_worker = DocumentLoaderWorker(self.document_service, file_path)
-
-        # Move worker to thread
-        self.loader_worker.moveToThread(self.loader_thread)
-
-        # Connect signals
-        self.loader_thread.started.connect(self.loader_worker.load_document)
-        self.loader_worker.progress_update.connect(self._update_load_progress)
-        self.loader_worker.page_loaded.connect(self._on_page_loaded)
-        self.loader_worker.finished.connect(self._on_document_loaded)
-        self.loader_worker.error.connect(self._on_load_error)
-        self.loader_worker.finished.connect(self.loader_thread.quit)
-        self.loader_worker.finished.connect(self.loader_worker.deleteLater)
-        self.loader_thread.finished.connect(self.loader_thread.deleteLater)
-        self._load_progress_dialog.canceled.connect(self.loader_worker.cancel)
-
-        # Clear page list and start loading
-        self.page_list.clear()
-        self.loader_thread.start()
-        self._load_progress_dialog.show()
-
-    def _update_load_progress(self, message, percentage):
-        """Update document load progress dialog"""
-        if hasattr(self, '_load_progress_dialog'):
-            self._load_progress_dialog.setLabelText(message)
-            self._load_progress_dialog.setValue(percentage)
-
-    def _on_page_loaded(self, thumbnail_image, page_index):
-        """Handle page thumbnail loading"""
-        if thumbnail_image and hasattr(self, '_load_progress_dialog'):
-            qimage = ImageQt(thumbnail_image)
-            pixmap = QPixmap.fromImage(qimage)
-            item = QListWidgetItem(QIcon(pixmap), f"Page {page_index+1}")
-            self.page_list.addItem(item)
-
-    def _on_document_loaded(self, document):
-        """Handle document loading completion"""
-        # Close progress dialog
-        if hasattr(self, '_load_progress_dialog'):
-            self._load_progress_dialog.close()
-            delattr(self, '_load_progress_dialog')
-
-        if document:
-            self.show_page(0)
-            self.update_status_bar()
-            # Show loaded file info in status bar
-            self.statusBar().showMessage(
-                f"Loaded: {os.path.basename(document.file_path)} | {document.file_path} | Pages: {len(document.pages)} | Markers: {document.total_rectangles}"
-            )
-        else:
-            QMessageBox.critical(self, "Error", "Document loading was cancelled or failed.")
+        
+    self.statusBar().showMessage(
+    f"Loaded: {os.path.basename(document.file_path)} | {document.file_path} | Pages: {len(document.pages)} | Markers: {document.total_rectangles}"
+    )
+    else:
+    QMessageBox.critical(self, "Error", "Document loading was cancelled or failed.")
 
     def _on_load_error(self, error_message):
-        """Handle document loading errors"""
-        if hasattr(self, '_load_progress_dialog'):
-            self._load_progress_dialog.close()
-            delattr(self, '_load_progress_dialog')
-        QMessageBox.critical(self, "Error", f"Failed to open file: {error_message}")
+    """Handle document loading errors"""
+    if hasattr(self, '_load_progress_dialog'):
+    self._load_progress_dialog.close()
+    delattr(self, '_load_progress_dialog')
+    QMessageBox.critical(self, "Error", f"Failed to open file: {error_message}")
 
     def show_page(self, page_num: int):
-        document = self.document_service.get_current_document()
-        if document and 0 <= page_num < document.page_count:
-            self.document_service.navigate_to_page(document, page_num)
-            self.scene.clear()
-            page = document.get_current_page()
-            if page and page.image:
-                self.scene.clear()
-                qimage = ImageQt(page.image)
-                pixmap = QPixmap.fromImage(qimage)
-                self.scene.addPixmap(pixmap)
-                self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
+    document = self.document_service.get_current_document()
+    if document and 0 <= page_num < document.page_count:
+    self.document_service.navigate_to_page(document, page_num)
+    self.scene.clear()
+    page = document.get_current_page()
+    if page and page.image:
+    self.scene.clear()
+    qimage = ImageQt(page.image)
+    pixmap = QPixmap.fromImage(qimage)
+    self.scene.addPixmap(pixmap)
+    self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
 
-                for rect_entity in page.rectangles:
-                    # Calculate width and height from start/end points
-                    x0, y0 = rect_entity.start_point
-                    x1, y1 = rect_entity.end_point
-                    width = x1 - x0
-                    height = y1 - y0
-                    rect_item = ResizableRectItem(QRectF(0, 0, width, height), entity_id=rect_entity.id)
-                    rect_item.setPos(x0, y0)
-                    rect_item.setBrush(QBrush(QColor(rect_entity.color))) # Use base color
-                    rect_item.setOpacity(0.5) # 50% transparency
-                    self.scene.addItem(rect_item)
+    for rect_entity in page.rectangles:
+    # Calculate width and height from start/end points
+    x0, y0 = rect_entity.start_point
+    x1, y1 = rect_entity.end_point
+    width = x1 - x0
+    height = y1 - y0
+    rect_item = ResizableRectItem(QRectF(0, 0, width, height), entity_id=rect_entity.id)
+    rect_item.setPos(x0, y0)
+    rect_item.setBrush(QBrush(QColor(rect_entity.color))) # Use base color
+    rect_item.setOpacity(0.5) # 50% transparency
+    self.scene.addItem(rect_item)
 
-            self.update_status_bar()
-            self.page_list.setCurrentRow(page_num)
+    self.update_status_bar()
+    self.page_list.setCurrentRow(page_num)
 
     def next_page(self):
-        document = self.document_service.get_current_document()
-        if document:
-            if self.document_service.navigate_next_page(document):
-                self.show_page(document.current_page_index)
+    document = self.document_service.get_current_document()
+    if document:
+    if self.document_service.navigate_next_page(document):
+    self.show_page(document.current_page_index)
 
     def prev_page(self):
-        document = self.document_service.get_current_document()
-        if document:
-            if self.document_service.navigate_previous_page(document):
-                self.show_page(document.current_page_index)
+    document = self.document_service.get_current_document()
+    if document:
+    if self.document_service.navigate_previous_page(document):
+    self.show_page(document.current_page_index)
 
     def on_page_selected(self, item):
-        row = self.page_list.row(item)
-        self.show_page(row)
+    row = self.page_list.row(item)
+    self.show_page(row)
 
     def update_status_bar(self):
-        document = self.document_service.get_current_document()
-        if document:
-            file_info = f"{os.path.basename(document.file_path)} | {document.file_path}" if document.file_path else "Untitled"
-            page_info = f"Page {document.current_page_index + 1} of {document.page_count}"
-            marker_info = f"Markers: {document.total_rectangles}"
-            self.statusBar().showMessage(f"{file_info} | {page_info} | {marker_info}")
-        else:
-            self.statusBar().showMessage("No file loaded")
+    document = self.document_service.get_current_document()
+    if document:
+    file_info = f"{os.path.basename(document.file_path)} | {document.file_path}" if document.file_path else "Untitled"
+    page_info = f"Page {document.current_page_index + 1} of {document.page_count}"
+    marker_info = f"Markers: {document.total_rectangles}"
+    self.statusBar().showMessage(f"{file_info} | {page_info} | {marker_info}")
+    else:
+    self.statusBar().showMessage("No file loaded")
 
     def zoom_in(self):
-        self.view.scale(1.2, 1.2)
+    self.view.scale(1.2, 1.2)
 
     def zoom_out(self):
-        self.view.scale(0.8, 0.8)
+    self.view.scale(0.8, 0.8)
 
 
 
     def delete_all(self):
-        """
-        Remove all markers from the current page and update the model.
-        """
-        document = self.document_service.get_current_document()
-        if document:
-            page = document.get_current_page()
-            if page:
-                self.redaction_service.clear_all_redactions(page)
-                self.show_page(document.current_page_index)
+    """
+    Remove all markers from the current page and update the model.
+    """
+    document = self.document_service.get_current_document()
+    if document:
+    page = document.get_current_page()
+    if page:
+    self.redaction_service.clear_all_redactions(page)
+    self.show_page(document.current_page_index)
 
 
 
     def save_edited_document(self):
-        document = self.document_service.get_current_document()
-        if not document:
-            QMessageBox.warning(self, "Save Document", "No document to save.")
-            return
+    document = self.document_service.get_current_document()
+    if not document:
+    QMessageBox.warning(self, "Save Document", "No document to save.")
+    return
 
-        if not document.file_path:
-            self.save_as_edited_document()
-            return
+    if not document.file_path:
+    self.save_as_edited_document()
+    return
 
-        base_name = os.path.splitext(os.path.basename(document.file_path))[0]
-        dir_name = os.path.dirname(document.file_path)
-        redacted_filename = f"{base_name}.Redacted.pdf"
-        save_file_path = os.path.join(dir_name, redacted_filename)
+    base_name = os.path.splitext(os.path.basename(document.file_path))[0]
+    dir_name = os.path.dirname(document.file_path)
+    redacted_filename = f"{base_name}.Redacted.pdf"
+    save_file_path = os.path.join(dir_name, redacted_filename)
 
-        # Use threaded export with progress dialog
-        self._export_document_threaded(save_file_path)
+    # Use threaded export with progress dialog
+    self._export_document_threaded(save_file_path)
 
     def _export_document_threaded(self, save_file_path):
-        """Export document using background thread with progress dialog"""
-        document = self.document_service.get_current_document()
-        if not document:
-            return
+    """Export document using background thread with enhanced progress dialog"""
+    document = self.document_service.get_current_document()
+    if not document:
+    return
 
-        # Create progress dialog
-        self._export_progress_dialog = QProgressDialog("Exporting document...", "Cancel", 0, 100, self)
-        self._export_progress_dialog.setWindowModality(Qt.WindowModal)
-        self._export_progress_dialog.setWindowTitle("Export Progress")
-        self._export_progress_dialog.setMinimumDuration(0)  # Show immediately
-        self._export_progress_dialog.setAutoClose(False)
-        self._export_progress_dialog.setAutoReset(False)
+    # Create enhanced progress dialog
+    self._export_progress_dialog = QProgressDialog("Exporting document...", "Cancel", 0, 100, self)
+    self._export_progress_dialog.setWindowModality(Qt.WindowModal)
+    self._export_progress_dialog.setWindowTitle("Export Progress")
+    self._export_progress_dialog.setMinimumDuration(0)  # Show immediately
+    self._export_progress_dialog.setAutoClose(False)
+    self._export_progress_dialog.setAutoReset(False)
+    self._export_progress_dialog.setFixedSize(400, 120)  # Fixed size for better appearance
 
-        # Create worker and thread
-        settings = {
-            "ocr_enabled": self.ocr_enabled,
-            "ocr_lang": self.ocr_lang,
-            "output_quality": self.output_quality
-        }
+    # Create worker and thread
+    settings = {
+    "ocr_enabled": self.ocr_enabled,
+    "ocr_lang": self.ocr_lang,
+    "output_quality": self.output_quality
+    }
 
-        self.export_thread = QThread()
-        self.export_worker = ExportWorker(
-            self.document_service,
-            document,
-            save_file_path,
-            settings
-        )
+    self.export_thread = QThread()
+    self.export_worker = ExportWorker(
+    self.document_service,
+    document,
+    save_file_path,
+    settings
+    )
 
-        # Move worker to thread
-        self.export_worker.moveToThread(self.export_thread)
+    # Move worker to thread
+    self.export_worker.moveToThread(self.export_thread)
 
-        # Connect signals
-        self.export_thread.started.connect(self.export_worker.export_document)
-        self.export_worker.progress_update.connect(self._update_export_progress)
-        self.export_worker.finished.connect(self._on_export_finished)
-        self.export_worker.error.connect(self._on_export_error)
-        self.export_worker.finished.connect(self.export_thread.quit)
-        self.export_worker.finished.connect(self.export_worker.deleteLater)
-        self.export_thread.finished.connect(self.export_thread.deleteLater)
-        self._export_progress_dialog.canceled.connect(self.export_worker.cancel)
+    # Connect signals
+    self.export_thread.started.connect(self.export_worker.export_document)
+    self.export_worker.progress_update.connect(self._update_export_progress)
+    self.export_worker.finished.connect(self._on_export_finished)
+    self.export_worker.error.connect(self._on_export_error)
+    self.export_worker.finished.connect(self.export_thread.quit)
+    self.export_worker.finished.connect(self.export_worker.deleteLater)
+    self.export_thread.finished.connect(self.export_thread.deleteLater)
+    self._export_progress_dialog.canceled.connect(self.export_worker.cancel)
 
-        # Start the export
-        self.export_thread.start()
-        self._export_progress_dialog.show()
+    # Start the export
+    self.export_thread.start()
+    self._export_progress_dialog.show()
 
     def _update_export_progress(self, message, percentage):
-        """Update progress dialog with current status"""
-        if hasattr(self, '_progress_dialog'):
-            self._export_progress_dialog.setLabelText(message)
-            self._export_progress_dialog.setValue(percentage)
+    """Update export progress dialog and status bar"""
+    if hasattr(self, '_export_progress_dialog'):
+    self._export_progress_dialog.setLabelText(message)
+    self._export_progress_dialog.setValue(percentage)
+    # Update status bar with current operation
+    self.statusBar().showMessage(f"Exporting: {message}")
 
     def _on_export_finished(self, success, message, file_path):
-        """Handle export completion"""
-        # Close progress dialog
-        if hasattr(self, '_export_progress_dialog'):
-            self._export_progress_dialog.close()
-            delattr(self, '_export_progress_dialog')
+    """Handle export completion"""
+    # Close progress dialog
+    if hasattr(self, '_export_progress_dialog'):
+    self._export_progress_dialog.close()
+    delattr(self, '_export_progress_dialog')
 
-        # Show result message
-        if success:
-            QMessageBox.information(self, "Export Successful", message)
-        else:
-            QMessageBox.critical(self, "Export Failed", message)
+    # Show result message
+    if success:
+    QMessageBox.information(self, "Export Successful", message)
+    else:
+    QMessageBox.critical(self, "Export Failed", message)
 
     def _on_export_error(self, error_message):
-        """Handle export errors"""
-        if hasattr(self, '_export_progress_dialog'):
-            self._export_progress_dialog.close()
-            delattr(self, '_export_progress_dialog')
-        QMessageBox.critical(self, "Export Error", f"An error occurred during export:\n{error_message}")
+    """Handle export errors"""
+    if hasattr(self, '_export_progress_dialog'):
+    self._export_progress_dialog.close()
+    delattr(self, '_export_progress_dialog')
+    QMessageBox.critical(self, "Export Error", f"An error occurred during export:\n{error_message}")
 
     def save_as_edited_document(self):
-        document = self.document_service.get_current_document()
-        if not document:
-            QMessageBox.warning(self, "Save Document As", "No document to save.")
-            return
+    document = self.document_service.get_current_document()
+    if not document:
+    QMessageBox.warning(self, "Save Document As", "No document to save.")
+    return
 
-        suggested_filename = "redacted_document.pdf"
-        if document.file_path:
-            base_name = os.path.splitext(os.path.basename(document.file_path))[0]
-            suggested_filename = f"{base_name}.Redacted.pdf"
+    suggested_filename = "redacted_document.pdf"
+    if document.file_path:
+    base_name = os.path.splitext(os.path.basename(document.file_path))[0]
+    suggested_filename = f"{base_name}.Redacted.pdf"
 
-        save_file_path, _ = QFileDialog.getSaveFileName(
-            self, "Save Document As", suggested_filename, "PDF Files (*.pdf)"
-        )
-        if save_file_path:
-            self._export_document_threaded(save_file_path)
+    save_file_path, _ = QFileDialog.getSaveFileName(
+    self, "Save Document As", suggested_filename, "PDF Files (*.pdf)"
+    )
+    if save_file_path:
+    self._export_document_threaded(save_file_path)
 
     def about(self):
-        QMessageBox.about(self, "About PyRedactor",
-                          "PyRedactor PDF Redaction Software\n\n"
-                          "Version 0.1.0\n"
-                          "Licensed under GPL V3.0\n\n"
-                          "©2025 Ernedin Zajko <ezajko@root.ba>")
+    QMessageBox.about(self, "About PyRedactor",
+    "PyRedactor PDF Redaction Software\n\n"
+    "Version 0.1.0\n"
+    "Licensed under GPL V3.0\n\n"
+    "©2025 Ernedin Zajko <ezajko@root.ba>")
 
     def trigger_batch_marker_operation(self, update_func, operation_name="Batch Operation"):
-        """
-        Trigger a batch marker/model operation in the background using BatchOperationWorker.
-        update_func should be a callable that takes the document and performs updates.
-        """
-        document = self.document_service.get_current_document()
-        if not document:
-            QMessageBox.warning(self, "Batch Operation", "No document loaded.")
-            return
+    """
+    Trigger a batch marker/model operation in the background using BatchOperationWorker.
+    update_func should be a callable that takes the document and performs updates.
+    """
+    document = self.document_service.get_current_document()
+    if not document:
+    QMessageBox.warning(self, "Batch Operation", "No document loaded.")
+    return
 
-        # Create progress dialog
-        self._batch_progress_dialog = QProgressDialog(f"{operation_name} in progress...", "Cancel", 0, 100, self)
-        self._batch_progress_dialog.setWindowModality(Qt.WindowModal)
-        self._batch_progress_dialog.setWindowTitle(operation_name)
-        self._batch_progress_dialog.setMinimumDuration(0)
-        self._batch_progress_dialog.setAutoClose(False)
-        self._batch_progress_dialog.setAutoReset(False)
+    # Create enhanced progress dialog
+    self._batch_progress_dialog = QProgressDialog(f"{operation_name} in progress...", "Cancel", 0, 100, self)
+    self._batch_progress_dialog.setWindowModality(Qt.WindowModal)
+    self._batch_progress_dialog.setWindowTitle(operation_name)
+    self._batch_progress_dialog.setMinimumDuration(0)
+    self._batch_progress_dialog.setAutoClose(False)
+    self._batch_progress_dialog.setAutoReset(False)
+    self._batch_progress_dialog.setFixedSize(400, 120)  # Fixed size for better appearance
 
-        # Create worker and thread
-        self.batch_thread = QThread()
-        self.batch_worker = BatchOperationWorker(document, update_func, operation_name)
+    # Create worker and thread
+    self.batch_thread = QThread()
+    self.batch_worker = BatchOperationWorker(document, update_func, operation_name)
 
-        # Move worker to thread
-        self.batch_worker.moveToThread(self.batch_thread)
+    # Move worker to thread
+    self.batch_worker.moveToThread(self.batch_thread)
 
-        # Connect signals
-        self.batch_thread.started.connect(self.batch_worker.execute_batch_operation)
-        self.batch_worker.progress_update.connect(self._update_batch_progress)
-        self.batch_worker.finished.connect(self._on_batch_finished)
-        self.batch_worker.error.connect(self._on_batch_error)
-        self.batch_worker.finished.connect(self.batch_thread.quit)
-        self.batch_worker.finished.connect(self.batch_worker.deleteLater)
-        self.batch_thread.finished.connect(self.batch_thread.deleteLater)
-        self._batch_progress_dialog.canceled.connect(self.batch_worker.cancel)
+    # Connect signals
+    self.batch_thread.started.connect(self.batch_worker.execute_batch_operation)
+    self.batch_worker.progress_update.connect(self._update_batch_progress)
+    self.batch_worker.finished.connect(self._on_batch_finished)
+    self.batch_worker.error.connect(self._on_batch_error)
+    self.batch_worker.finished.connect(self.batch_thread.quit)
+    self.batch_worker.finished.connect(self.batch_worker.deleteLater)
+    self.batch_thread.finished.connect(self.batch_thread.deleteLater)
+    self._batch_progress_dialog.canceled.connect(self.batch_worker.cancel)
 
-        # Start the batch operation
-        self.batch_thread.start()
-        self._batch_progress_dialog.show()
+    # Start the batch operation
+    self.batch_thread.start()
+    self._batch_progress_dialog.show()
 
     def _update_batch_progress(self, message, percentage):
-        """Update batch operation progress dialog"""
-        if hasattr(self, '_batch_progress_dialog'):
-            self._batch_progress_dialog.setLabelText(message)
-            self._batch_progress_dialog.setValue(percentage)
+    """Update batch operation progress dialog and status bar"""
+    if hasattr(self, '_batch_progress_dialog'):
+    self._batch_progress_dialog.setLabelText(message)
+    self._batch_progress_dialog.setValue(percentage)
+    # Update status bar with current operation
+    self.statusBar().showMessage(f"Batch Operation: {message}")
 
     def _on_batch_finished(self, success, message):
-        """Handle batch operation completion"""
-        # Close progress dialog
-        if hasattr(self, '_batch_progress_dialog'):
-            self._batch_progress_dialog.close()
-            delattr(self, '_batch_progress_dialog')
+    """Handle batch operation completion"""
+    # Close progress dialog
+    if hasattr(self, '_batch_progress_dialog'):
+    self._batch_progress_dialog.close()
+    delattr(self, '_batch_progress_dialog')
 
-        # Show result message
-        if success:
-            QMessageBox.information(self, "Batch Operation", message)
-            # Optionally refresh the UI
-            document = self.document_service.get_current_document()
-            if document:
-                self.show_page(document.current_page_index)
-        else:
-            QMessageBox.critical(self, "Batch Operation", message)
+    # Show result message
+    if success:
+    QMessageBox.information(self, "Batch Operation", message)
+    # Optionally refresh the UI
+    document = self.document_service.get_current_document()
+    if document:
+    self.show_page(document.current_page_index)
+    else:
+    QMessageBox.critical(self, "Batch Operation", message)
 
     def _on_batch_error(self, error_message):
-        """Handle batch operation errors"""
-        if hasattr(self, '_batch_progress_dialog'):
-            self._batch_progress_dialog.close()
-            delattr(self, '_batch_progress_dialog')
-        QMessageBox.critical(self, "Batch Operation Error", f"An error occurred during batch operation:\n{error_message}")
+    """Handle batch operation errors"""
+    if hasattr(self, '_batch_progress_dialog'):
+    self._batch_progress_dialog.close()
+    delattr(self, '_batch_progress_dialog')
+    QMessageBox.critical(self, "Batch Operation Error", f"An error occurred during batch operation:\n{error_message}")
 
     def on_batch_update_finished(self, success, message):
-        if success:
-            QMessageBox.information(self, "Batch Operation", message)
-            # Optionally refresh the UI
-            self.show_page(self.document_service.get_current_document().current_page_index)
-        else:
-            QMessageBox.critical(self, "Batch Operation", message)
+    if success:
+    QMessageBox.information(self, "Batch Operation", message)
+    # Optionally refresh the UI
+    self.show_page(self.document_service.get_current_document().current_page_index)
+    else:
+    QMessageBox.critical(self, "Batch Operation", message)
 
     def on_save_finished(self, success, message):
-        if success:
-            QMessageBox.information(self, "Save Document", message)
-        else:
-            QMessageBox.critical(self, "Save Document", message)
+    if success:
+    QMessageBox.information(self, "Save Document", message)
+    else:
+    QMessageBox.critical(self, "Save Document", message)
 
     def on_export_finished(self, success, message):
-        if success:
-            QMessageBox.information(self, "Export PDF", message)
-        else:
-            QMessageBox.critical(self, "Export PDF", message)
+    if success:
+    QMessageBox.information(self, "Export PDF", message)
+    else:
+    QMessageBox.critical(self, "Export PDF", message)
 
-    if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    sys.exit(app.exec())
+    QMessageBox.critical(self, "Export PDF", message)
 
     event.accept()
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    sys.exit(app.exec())
+    def toggle_enhancement_options(self):
+    """Toggle image enhancement options dialog"""
+    from .dialogs.enhancement_options_dialog import EnhancementOptionsDialog
+
+    dialog = EnhancementOptionsDialog(
+    self,
+    enhancement_enabled=self.enhancement_enabled,
+    brightness=self.enhancement_brightness,
+    contrast=self.enhancement_contrast,
+    sharpness=self.enhancement_sharpness,
+    auto_level=self.enhancement_auto_level,
+    deskew=self.enhancement_deskew,
+    denoise=self.enhancement_denoise
+    )
+
+    if dialog.exec() == QDialog.Accepted:
+    values = dialog.get_values()
+    self.enhancement_enabled = values["enhancement_enabled"]
+    self.enhancement_brightness = values["brightness"]
+    self.enhancement_contrast = values["contrast"]
+    self.enhancement_sharpness = values["sharpness"]
+    self.enhancement_auto_level = values["auto_level"]
+    self.enhancement_deskew = values["deskew"]
+    self.enhancement_denoise = values["denoise"]
+
+    # Pass settings to document repository
+    if hasattr(self.document_service, "document_repository"):
+    self.document_service.document_repository.set_enhancement_settings(
+    enabled=self.enhancement_enabled,
+    brightness=self.enhancement_brightness,
+    contrast=self.enhancement_contrast,
+    sharpness=self.enhancement_sharpness,
+    auto_level=self.enhancement_auto_level,
+    deskew=self.enhancement_deskew,
+    denoise=self.enhancement_denoise
+    )
+
+    # Show status message
+    if self.enhancement_enabled:
+    self.statusBar().showMessage("Image enhancement enabled - will be applied to new documents")
+    else:
+    self.statusBar().showMessage("Image enhancement disabled")

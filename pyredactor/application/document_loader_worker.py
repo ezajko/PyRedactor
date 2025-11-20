@@ -36,9 +36,35 @@ class DocumentLoaderWorker(QObject):
         try:
             self.progress_update.emit("Initializing document loader...", 0)
 
+            # Check if unpaper preprocessing is available
+            unpaper_available = False
+            try:
+                from ..ocr.unpaper_preprocessing import UnpaperPreprocessingService
+                unpaper_service = UnpaperPreprocessingService()
+                unpaper_available = unpaper_service.is_available()
+            except ImportError:
+                pass
+
             # Load the document
-            self.progress_update.emit("Loading document from file...", 5)
-            document = self.document_service.load_document(self.file_path)
+            if unpaper_available:
+                self.progress_update.emit("Loading document from file (unpaper preprocessing available)...", 5)
+            else:
+                self.progress_update.emit("Loading document from file...", 5)
+
+            # Define callback for repository
+            def repo_progress_callback(current, total, message):
+                if self._cancelled:
+                    raise InterruptedError("Loading cancelled")
+                
+                # Map 0-100% of repository loading to 5-80% of overall progress
+                percentage = 5 + int((current / total) * 75)
+                self.progress_update.emit(message, percentage)
+
+            try:
+                document = self.document_service.load_document(self.file_path, repo_progress_callback)
+            except InterruptedError:
+                self.finished.emit(None)
+                return
 
             if not document:
                 self.error.emit("Failed to load document - invalid file format or corrupted file")
@@ -48,7 +74,7 @@ class DocumentLoaderWorker(QObject):
                 self.finished.emit(None)
                 return
 
-            self.progress_update.emit(f"Document loaded - processing {len(document.pages)} pages...", 15)
+            self.progress_update.emit(f"Document loaded - processing thumbnails...", 80)
 
             # Process each page for thumbnails
             total_pages = len(document.pages)
@@ -57,9 +83,9 @@ class DocumentLoaderWorker(QObject):
                     self.finished.emit(None)
                     return
 
-                # Update progress with more detailed information
-                page_progress = 15 + int((i / total_pages) * 80)  # 15-95% for page processing
-                self.progress_update.emit(f"Processing page {i+1} of {total_pages} - rendering thumbnail...", page_progress)
+                # Update progress for thumbnails (80-95%)
+                page_progress = 80 + int((i / total_pages) * 15)
+                self.progress_update.emit(f"Generating thumbnail for page {i+1}...", page_progress)
 
                 # Create thumbnail
                 if page.image:

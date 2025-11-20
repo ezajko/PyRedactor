@@ -16,7 +16,7 @@ import pytesseract
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QToolBar, QGraphicsView, QGraphicsScene, QFileDialog,
     QRubberBand, QGraphicsRectItem, QMessageBox, QStatusBar, QDockWidget, QListWidget, QListWidgetItem,
-    QComboBox, QCheckBox, QProgressDialog
+    QComboBox, QCheckBox, QProgressDialog, QDialog, QPushButton, QSlider, QVBoxLayout, QHBoxLayout, QSpinBox
 )
 from PySide6.QtGui import QAction, QIcon, QPixmap, QColor, QBrush, QPen
 from PySide6.QtCore import Qt, QPoint, QRect, QSize, QRectF, QThread, Signal
@@ -26,7 +26,7 @@ from PIL.ImageQt import ImageQt
 import io
 import copy
 
-from .graphics_items import ResizableRectItem, PhotoViewer
+from .graphics_items import ResizableRectItem, PhotoViewer, CropRectItem
 
 from ..core.services.document_management import DocumentManagementService
 from ..core.services.redaction import RedactionService
@@ -38,11 +38,106 @@ from ..application.document_loader_worker import DocumentLoaderWorker
 from ..application.batch_worker import BatchOperationWorker
 from PySide6.QtCore import QThread
 
+class OCRLanguageLoader(QThread):
+    """Worker thread to load OCR languages asynchronously"""
+    languages_loaded = Signal(list)
+    
+    def run(self):
+        try:
+            langs = pytesseract.get_languages()
+            self.languages_loaded.emit(langs)
+        except Exception as e:
+            print(f"Error loading OCR languages: {e}")
+            self.languages_loaded.emit([])
+
+class RotationDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Fine Rotation")
+        self.resize(300, 100)
+        self.angle = 0.0
+        
+        layout = QVBoxLayout(self)
+        
+        # Controls
+        controls_layout = QHBoxLayout()
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setRange(-100, 100) # -10.0 to 10.0 degrees
+        self.slider.setValue(0)
+        
+        self.spinbox = QSpinBox()
+        self.spinbox.setRange(-10, 10)
+        self.spinbox.setSuffix("°")
+        
+        controls_layout.addWidget(QLabel("Angle:"))
+        controls_layout.addWidget(self.slider)
+        controls_layout.addWidget(self.spinbox)
+        layout.addLayout(controls_layout)
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        self.apply_btn = QPushButton("Apply")
+        self.apply_btn.clicked.connect(self.accept)
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.clicked.connect(self.reject)
+        
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.cancel_btn)
+        btn_layout.addWidget(self.apply_btn)
+        layout.addLayout(btn_layout)
+        
+        # Connect signals
+        self.slider.valueChanged.connect(self._on_slider_change)
+        self.spinbox.valueChanged.connect(self._on_spinbox_change)
+        
+    def _on_slider_change(self, value):
+        self.angle = value / 10.0
+        self.spinbox.blockSignals(True)
+        self.spinbox.setValue(int(self.angle))
+        self.spinbox.blockSignals(False)
+        
+    def _on_spinbox_change(self, value):
+        self.angle = float(value)
+        self.slider.blockSignals(True)
+        self.slider.setValue(int(self.angle * 10))
+        self.slider.blockSignals(False)
+        
+    def get_angle(self):
+        return self.angle
+
+class CropDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Crop Page")
+        self.setWindowFlags(Qt.Tool) # Floating tool window
+        self.resize(250, 150)
+        
+        layout = QVBoxLayout(self)
+        
+        layout.addWidget(QLabel("Select Aspect Ratio:"))
+        
+        self.ratio_combo = QComboBox()
+        self.ratio_combo.addItems(["Free", "A4 (Portrait)", "A4 (Landscape)", "Letter (Portrait)", "Letter (Landscape)"])
+        self.ratio_combo.currentTextChanged.connect(self.parent().update_crop_ratio)
+        layout.addWidget(self.ratio_combo)
+        
+        layout.addStretch()
+        
+        btn_layout = QHBoxLayout()
+        self.apply_btn = QPushButton("Apply Crop")
+        self.apply_btn.clicked.connect(self.accept)
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.clicked.connect(self.reject)
+        
+        btn_layout.addWidget(self.cancel_btn)
+        btn_layout.addWidget(self.apply_btn)
+        layout.addLayout(btn_layout)
+
 class MainWindow(QMainWindow):
     def __init__(self, document_service: DocumentManagementService, redaction_service: RedactionService, settings_service: SettingsManagementService):
         super().__init__()
 
-        print("[DEBUG] MainWindow: __init__ started")
+        # print("[DEBUG] MainWindow: __init__ started") # Removed debug
 
         self.document_service = document_service
         self.redaction_service = redaction_service
@@ -62,317 +157,481 @@ class MainWindow(QMainWindow):
         # self.model_worker.export_finished.connect(self.on_export_finished)
         # self.model_worker.batch_update_finished.connect(self.on_batch_update_finished)
 
-        self.fill_color = 'black'
+        self.fill_color = '#000000'
         self.output_quality = 'ebook'
         self.history_length = 30
-        self.color_list = ["#000000", "#ffffff", "#ff0000", "#00ff00"] # Black, White, Red, Green (hex codes)
+        self.color_map = {
+            "Black": "#000000", 
+            "White": "#ffffff", 
+            "Red": "#ff0000", 
+            "Green": "#00ff00"
+        }
 
         self.page_list = QListWidget()
+        self.page_list.itemClicked.connect(self.on_page_selected)
+        
+        # Setup Dock Widget for Pages
+        self.dock = QDockWidget("Pages", self)
+        self.dock.setWidget(self.page_list)
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.dock)
+
         self.scene = QGraphicsScene()
         self.view = PhotoViewer(self)
         self.view.setScene(self.scene)
-
-        self.ocr_enabled = True
-
-        print("[DEBUG] MainWindow: UI widgets created")
-
-        # Temporarily disable OCR language detection to avoid hangs
-        # available_langs = self.get_available_ocr_languages()
-        available_langs = ["eng"]  # Default to English
-        if available_langs:
-            self.ocr_lang = os.getenv('PYREDACTOR_OCR_LANG', available_langs[0])
-            if self.ocr_lang not in available_langs:
-                self.ocr_lang = available_langs[0]
-        else:
-            self.ocr_lang = "eng"
-
-        print("[DEBUG] MainWindow: Calling _create_toolbar()")
-        self._create_toolbar()
-        print("[DEBUG] MainWindow: Toolbar created")
-
-        print("[DEBUG] MainWindow: Setting central widget")
         self.setCentralWidget(self.view)
 
-        print("[DEBUG] MainWindow: Creating page browser")
-        self._create_page_browser()
+        # OCR Settings
+        self.ocr_enabled = False
+        self.available_ocr_langs = []
+        self.selected_ocr_langs = ["eng"]
+        
+        # Start loading languages in background
+        self.lang_loader = OCRLanguageLoader()
+        self.lang_loader.languages_loaded.connect(self.on_languages_loaded)
+        self.lang_loader.start()
 
-        print("[DEBUG] MainWindow: Setting status bar")
-        self.setStatusBar(QStatusBar(self))
+        # Image enhancement options
+        self.enhancement_enabled = False
+        self.enhancement_brightness = 1.0
+        self.enhancement_contrast = 1.0
+        self.enhancement_sharpness = 1.0
+        self.enhancement_auto_level = True
+        self.enhancement_deskew = True
+        self.enhancement_denoise = True
+        
+        # Crop state
+        self.crop_mode = False
+        self.crop_rect_item = None
+        self.crop_dialog = None
 
-        print("[DEBUG] MainWindow: Updating status bar")
+        self.setup_toolbar()
         self.update_status_bar()
 
-        print("[DEBUG] MainWindow: __init__ finished")
+    def on_languages_loaded(self, langs):
+        """Callback when OCR languages are loaded"""
+        self.available_ocr_langs = langs
+        # Ensure 'eng' is selected if available, otherwise first available
+        if not self.selected_ocr_langs and langs:
+            if 'eng' in langs:
+                self.selected_ocr_langs = ['eng']
+            else:
+                self.selected_ocr_langs = [langs[0]]
+        
+        # Update UI if needed (e.g. enable language button)
+        if hasattr(self, 'ocr_lang_btn'):
+            self.ocr_lang_btn.setEnabled(True)
+            self.update_ocr_lang_tooltip()
 
-
-
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Delete or event.key() == Qt.Key_D:
-            selected_items = self.scene.selectedItems()
-            for item in selected_items:
-                if isinstance(item, ResizableRectItem):
-                    # Remove from scene
-                    self.scene.removeItem(item)
-                    print(f"[DEBUG] MainWindow: Deleted marker from scene (ID: {item._entity_id})")
-
-                    # Remove from document data
-                    document = self.document_service.get_current_document()
-                    if document:
-                        page = document.get_current_page()
-                        if page:
-                            self.redaction_service.remove_redaction_rectangle(page, item._entity_id)
-                            print(f"[DEBUG] MainWindow: Deleted marker from document data (ID: {item._entity_id})")
-            self.scene.update() # Force repaint
-        elif event.key() == Qt.Key_C:
-            selected_items = self.scene.selectedItems()
-            for item in selected_items:
-                if isinstance(item, ResizableRectItem):
-                    current_color_index = (self.color_list.index(item.brush().color().name()) + 1) % len(self.color_list)
-                    new_color_name = self.color_list[current_color_index]
-                    new_color = QColor(new_color_name)
-
-                    item.setBrush(QBrush(new_color)) # Apply new color to scene item
-                    print(f"[DEBUG] MainWindow: Changed marker color to {new_color_name} (ID: {item._entity_id})")
-
-                    # Update document data
-                    document = self.document_service.get_current_document()
-                    if document:
-                        page = document.get_current_page()
-                        if page:
-                            self.redaction_service.change_redaction_color(page, item._entity_id, new_color_name)
-                            print(f"[DEBUG] MainWindow: Updated marker color in document data (ID: {item._entity_id})")
-            self.scene.update() # Force repaint
-        elif event.key() in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
-            selected_items = self.scene.selectedItems()
-            for item in selected_items:
-                if isinstance(item, ResizableRectItem):
-                    delta_x = 0
-                    delta_y = 0
-                    step = 1 # Move by 1 pixel
-
-                    if event.key() == Qt.Key_Up:
-                        delta_y = -step
-                    elif event.key() == Qt.Key_Down:
-                        delta_y = step
-                    elif event.key() == Qt.Key_Left:
-                        delta_x = -step
-                    elif event.key() == Qt.Key_Right:
-                        delta_x = step
-
-                    # Move in UI
-                    item.setPos(item.pos().x() + delta_x, item.pos().y() + delta_y)
-                    print(f"[DEBUG] MainWindow: Moved marker (ID: {item._entity_id}) in UI by ({delta_x}, {delta_y})")
-
-                    # Update document data
-                    document = self.document_service.get_current_document()
-                    if document:
-                        page = document.get_current_page()
-                        if page:
-                            # Update the model to match the new position
-                            rect = item.rect()
-                            pos = item.pos()
-                            start_point = (rect.topLeft().x() + pos.x(), rect.topLeft().y() + pos.y())
-                            end_point = (rect.bottomRight().x() + pos.x(), rect.bottomRight().y() + pos.y())
-                            rectangle_entity = page.get_rectangle(item._entity_id)
-                            if rectangle_entity:
-                                rectangle_entity.start_point = start_point
-                                rectangle_entity.end_point = end_point
-                            print(f"[DEBUG] MainWindow: Updated marker position in document data (ID: {item._entity_id})")
-            self.scene.update() # Force repaint
-        super().keyPressEvent(event)
-
-    def _create_toolbar(self):
-        print("[DEBUG] MainWindow: _create_toolbar started")
+    def setup_toolbar(self):
         toolbar = QToolBar("Main Toolbar")
-        toolbar.setIconSize(QSize(32, 32))
-        toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        toolbar.layout().setSpacing(10)
+        toolbar.setIconSize(QSize(24, 24))
         self.addToolBar(toolbar)
-        print("[DEBUG] MainWindow: Toolbar created")
 
-        open_action = QAction(get_icon_from_theme("document-open", "open"), "Open", self)
-        open_action.triggered.connect(self.open_file)
-
-        save_action = QAction(get_icon_from_theme("document-save", "save"), "Save", self)
-        save_action.triggered.connect(self.save_edited_document)
-
-        save_as_action = QAction(get_icon_from_theme("document-save-as", "save_as"), "Save As", self)
-        save_as_action.triggered.connect(self.save_as_edited_document)
-
-        delete_all_action = QAction(get_icon_from_theme("edit-delete", "delete"), "Delete All", self)
-        delete_all_action.triggered.connect(self.delete_all)
-
-        prev_page_action = QAction(get_icon_from_theme("go-previous", "prev_page"), "Previous", self)
-        prev_page_action.triggered.connect(self.prev_page)
-
-        next_page_action = QAction(get_icon_from_theme("go-next", "next_page"), "Next", self)
-        next_page_action.triggered.connect(self.next_page)
-
-        zoom_in_action = QAction(get_icon_from_theme("zoom-in", "zoom_in"), "Zoom In", self)
-        zoom_in_action.triggered.connect(self.zoom_in)
-
-        zoom_out_action = QAction(get_icon_from_theme("zoom-out", "zoom_out"), "Zoom Out", self)
-        zoom_out_action.triggered.connect(self.zoom_out)
-
-        quit_action = QAction(get_icon_from_theme("application-exit", "quit"), "Quit", self)
-        quit_action.triggered.connect(self.close)
-
-        about_action = QAction(get_icon_from_theme("help-about", "about"), "About", self)
-        about_action.triggered.connect(self.about)
-
+        # Open Action
+        open_action = QAction(QIcon.fromTheme("document-open"), "Open", self)
+        open_action.setStatusTip("Open a PDF document")
+        open_action.triggered.connect(self.open_document)
         toolbar.addAction(open_action)
+
+        # Save Action
+        save_action = QAction(QIcon.fromTheme("document-save"), "Save", self)
+        save_action.setStatusTip("Save redactions")
+        save_action.triggered.connect(self.save_edited_document)
         toolbar.addAction(save_action)
-        toolbar.addAction(save_as_action)
+
         toolbar.addSeparator()
-        toolbar.addAction(delete_all_action)
-        toolbar.addSeparator()
-        toolbar.addAction(prev_page_action)
-        toolbar.addAction(next_page_action)
-        toolbar.addSeparator()
+
+        # Zoom In
+        zoom_in_action = QAction(QIcon.fromTheme("zoom-in"), "Zoom In", self)
+        zoom_in_action.setStatusTip("Zoom In")
+        zoom_in_action.triggered.connect(self.zoom_in)
         toolbar.addAction(zoom_in_action)
+
+        # Zoom Out
+        zoom_out_action = QAction(QIcon.fromTheme("zoom-out"), "Zoom Out", self)
+        zoom_out_action.setStatusTip("Zoom Out")
+        zoom_out_action.triggered.connect(self.zoom_out)
         toolbar.addAction(zoom_out_action)
+        
+        toolbar.addSeparator()
+        
+        # Previous Page
+        prev_action = QAction(QIcon.fromTheme("go-previous"), "Prev Page", self)
+        prev_action.setStatusTip("Go to previous page")
+        prev_action.triggered.connect(self.prev_page)
+        toolbar.addAction(prev_action)
+        
+        # Next Page
+        next_action = QAction(QIcon.fromTheme("go-next"), "Next Page", self)
+        next_action.setStatusTip("Go to next page")
+        next_action.triggered.connect(self.next_page)
+        toolbar.addAction(next_action)
+
         toolbar.addSeparator()
 
-        self.quality_combo = QComboBox()
-        self.quality_combo.addItems(["screen", "ebook", "printer", "prepress"])
-        self.quality_combo.setCurrentText(self.output_quality)
-        self.quality_combo.currentTextChanged.connect(self.quality_changed)
-        self.quality_combo.setMinimumHeight(32)
-        toolbar.addWidget(self.quality_combo)
+        # Delete Selected Marker
+        delete_selected_action = QAction(QIcon.fromTheme("edit-clear"), "Delete Marker", self)
+        delete_selected_action.setStatusTip("Delete selected marker")
+        delete_selected_action.setShortcut("Delete")
+        delete_selected_action.triggered.connect(self.delete_selected_marker)
+        toolbar.addAction(delete_selected_action)
+
+        # Delete All Markers
+        delete_all_action = QAction(QIcon.fromTheme("edit-delete"), "Clear Page", self)
+        delete_all_action.setStatusTip("Clear all markers on current page")
+        delete_all_action.triggered.connect(self.delete_all)
+        toolbar.addAction(delete_all_action)
+
         toolbar.addSeparator()
 
-        self.ocr_checkbox = QCheckBox("Enable OCR")
+        # Color Selection
+        color_label = QLabel("Color: ")
+        toolbar.addWidget(color_label)
+        
+        self.color_combo = QComboBox()
+        self.color_combo.addItems(list(self.color_map.keys()))
+        self.color_combo.setCurrentText("Black")
+        self.color_combo.currentTextChanged.connect(self.change_marker_color)
+        toolbar.addWidget(self.color_combo)
+
+        toolbar.addSeparator()
+
+        # OCR Toggle
+        self.ocr_checkbox = QCheckBox("OCR")
+        self.ocr_checkbox.setToolTip("Enable OCR (Text Recognition) when saving")
         self.ocr_checkbox.setChecked(self.ocr_enabled)
-        self.ocr_checkbox.stateChanged.connect(self.ocr_enabled_changed)
-        self.ocr_checkbox.setStyleSheet("QCheckBox { height: 32px; }")
+        self.ocr_checkbox.toggled.connect(self.toggle_ocr)
         toolbar.addWidget(self.ocr_checkbox)
+        
+        # OCR Language Button
+        self.ocr_lang_btn = QPushButton("Langs")
+        self.ocr_lang_btn.setToolTip("Select OCR Languages")
+        self.ocr_lang_btn.clicked.connect(self.open_ocr_language_dialog)
+        self.ocr_lang_btn.setEnabled(False) # Disabled until languages load
+        toolbar.addWidget(self.ocr_lang_btn)
 
-        self.ocr_lang_combo = QComboBox()
-        available_langs = self.get_available_ocr_languages()
-        if available_langs:
-            self.ocr_lang_combo.addItems(available_langs)
-            default_lang = self.ocr_lang if self.ocr_lang in available_langs else available_langs[0]
-            self.ocr_lang_combo.setCurrentText(default_lang)
-        else:
-            self.ocr_lang_combo.addItems(["No languages found"])
-            self.ocr_lang_combo.setEnabled(False)
-            self.ocr_checkbox.setChecked(False)
-            self.ocr_checkbox.setEnabled(False)
-        self.ocr_lang_combo.currentTextChanged.connect(self.ocr_lang_changed)
-        self.ocr_lang_combo.setMinimumHeight(32)
-        toolbar.addWidget(self.ocr_lang_combo)
         toolbar.addSeparator()
 
-        toolbar.addAction(quit_action)
+        # Rotate Left
+        rotate_left_action = QAction(QIcon.fromTheme("object-rotate-left"), "Rot L", self)
+        rotate_left_action.setStatusTip("Rotate page 90° Counter-Clockwise")
+        rotate_left_action.triggered.connect(self.rotate_left)
+        toolbar.addAction(rotate_left_action)
+
+        # Rotate Right
+        rotate_right_action = QAction(QIcon.fromTheme("object-rotate-right"), "Rot R", self)
+        rotate_right_action.setStatusTip("Rotate page 90° Clockwise")
+        rotate_right_action.triggered.connect(self.rotate_right)
+        toolbar.addAction(rotate_right_action)
+        
+        # Fine Rotate
+        fine_rotate_action = QAction(QIcon.fromTheme("transform-rotate"), "Fine Rot", self)
+        fine_rotate_action.setStatusTip("Fine rotation for deskewing")
+        fine_rotate_action.triggered.connect(self.fine_rotate)
+        toolbar.addAction(fine_rotate_action)
+        
         toolbar.addSeparator()
-        toolbar.addAction(about_action)
-        print("[DEBUG] MainWindow: _create_toolbar finished")
+        
+        # Crop Tool
+        crop_action = QAction(QIcon.fromTheme("transform-crop"), "Crop", self)
+        crop_action.setStatusTip("Crop page")
+        crop_action.triggered.connect(self.toggle_crop_tool)
+        toolbar.addAction(crop_action)
 
-    def _create_page_browser(self):
-        self.page_browser_dock = QDockWidget("Page Browser", self)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.page_browser_dock)
-        self.page_browser_dock.setWidget(self.page_list)
-        self.page_list.itemClicked.connect(self.on_page_selected)
-        self.page_browser_dock.show()
-        self.page_browser_dock.setFloating(False)
-        self.page_browser_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+    def rotate_left(self):
+        """Rotate current page 90 degrees counter-clockwise"""
+        self._rotate_page(90)
 
-    def get_available_ocr_languages(self):
-        return self.document_service.ocr_service.get_available_languages()
+    def rotate_right(self):
+        """Rotate current page 90 degrees clockwise"""
+        self._rotate_page(-90)
+        
+    def fine_rotate(self):
+        """Open dialog for fine rotation"""
+        dialog = RotationDialog(self)
+        if dialog.exec() == QDialog.Accepted:
+            angle = dialog.get_angle()
+            if angle != 0:
+                self._rotate_page(angle)
 
-    def ocr_lang_changed(self, lang):
-        self.ocr_lang = lang
+    def _rotate_page(self, angle):
+        """Helper to rotate page and refresh view"""
+        # Cancel crop mode if active to prevent stale state
+        if self.crop_mode:
+            self.toggle_crop_tool()
 
-    def ocr_enabled_changed(self, state):
-        self.ocr_enabled = state == Qt.Checked
+        document = self.document_service.get_current_document()
+        if not document:
+            return
 
-    def quality_changed(self, quality):
-        self.output_quality = quality
-
-
-
-    def open_file(self, file_path: str = None):
-        if not file_path:
-            documents_path = os.path.expanduser("~/Documents")
-            if not os.path.exists(documents_path):
-                documents_path = os.path.expanduser("~")
-
-            file_path, _ = QFileDialog.getOpenFileName(
-                self, "Open File", documents_path, "PDF Files (*.pdf);;Image Files (*.png *.jpg *.bmp)"
+        # Warn user about clearing markers
+        if document.total_rectangles > 0:
+            reply = QMessageBox.question(
+                self,
+                "Rotate Page",
+                "Rotating the page will clear all markers on this page. Continue?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
             )
+            if reply == QMessageBox.No:
+                return
 
+        if self.document_service.rotate_page(document, document.current_page_index, angle):
+            self.show_page(document.current_page_index)
+            self.statusBar().showMessage(f"Page rotated by {angle}°")
+        else:
+            self.statusBar().showMessage("Failed to rotate page")
+            
+    def toggle_crop_tool(self):
+        """Toggle crop mode"""
+        self.crop_mode = not self.crop_mode
+        
+        if self.crop_mode:
+            # Start crop mode
+            self.statusBar().showMessage("Crop Mode Active")
+            self.crop_dialog = CropDialog(self)
+            self.crop_dialog.finished.connect(self.finish_crop)
+            self.crop_dialog.show()
+            
+            # Add initial crop rect
+            self.add_crop_rect()
+        else:
+            # Cancel crop mode
+            self.statusBar().showMessage("Crop Mode Cancelled")
+            if self.crop_dialog:
+                self.crop_dialog.close()
+                self.crop_dialog = None
+            self.remove_crop_rect()
+
+    def add_crop_rect(self):
+        """Add a resizable rectangle for cropping"""
+        # Check if item exists and is valid
+        if self.crop_rect_item:
+            try:
+                # If item is already in the scene, remove it
+                if self.crop_rect_item.scene() == self.scene:
+                    self.scene.removeItem(self.crop_rect_item)
+            except RuntimeError:
+                # Item was already deleted (e.g. by scene.clear())
+                pass
+            self.crop_rect_item = None
+            
+        # Default to center 50%
+        scene_rect = self.scene.sceneRect()
+        
+        w = scene_rect.width() * 0.5
+        h = scene_rect.height() * 0.5
+        x = (scene_rect.width() - w) / 2
+        y = (scene_rect.height() - h) / 2
+        
+        # Use dedicated CropRectItem
+        self.crop_rect_item = CropRectItem(QRectF(0, 0, w, h))
+        self.crop_rect_item.setPos(x, y)
+        
+        self.scene.addItem(self.crop_rect_item)
+        
+    def remove_crop_rect(self):
+        if self.crop_rect_item:
+            try:
+                if self.crop_rect_item.scene() == self.scene:
+                    self.scene.removeItem(self.crop_rect_item)
+            except RuntimeError:
+                # Item already deleted
+                pass
+            self.crop_rect_item = None
+            
+    def update_crop_ratio(self, ratio_name):
+        """Update crop rect aspect ratio based on selection"""
+        if not self.crop_rect_item:
+            return
+            
+        try:
+            # Calculate new height based on width and ratio
+            rect = self.crop_rect_item.rect()
+            width = rect.width()
+            height = rect.height()
+            
+            ratio = None
+            
+            if ratio_name == "A4 (Portrait)":
+                ratio = 1.414
+                height = width * ratio
+            elif ratio_name == "A4 (Landscape)":
+                ratio = 1/1.414
+                height = width * ratio
+            elif ratio_name == "Letter (Portrait)":
+                ratio = 1.294
+                height = width * ratio
+            elif ratio_name == "Letter (Landscape)":
+                ratio = 1/1.294
+                height = width * ratio
+            
+            # Set the aspect ratio on the item for enforcement during resize
+            self.crop_rect_item.aspect_ratio = ratio
+            
+            self.crop_rect_item.setRect(QRectF(0, 0, width, height))
+        except RuntimeError:
+            self.crop_rect_item = None
+        
+    def finish_crop(self, result):
+        """Apply crop if accepted"""
+        if result == QDialog.Accepted and self.crop_rect_item:
+            try:
+                rect = self.crop_rect_item.sceneBoundingRect()
+                x = int(rect.x())
+                y = int(rect.y())
+                w = int(rect.width())
+                h = int(rect.height())
+                
+                document = self.document_service.get_current_document()
+                if document:
+                    if self.document_service.crop_page(document, document.current_page_index, x, y, w, h):
+                        self.show_page(document.current_page_index)
+                        self.statusBar().showMessage("Page cropped")
+                    else:
+                        self.statusBar().showMessage("Failed to crop page")
+            except RuntimeError:
+                self.statusBar().showMessage("Error: Crop selection lost")
+        
+        self.crop_mode = False
+        self.remove_crop_rect()
+        self.crop_dialog = None
+
+    def toggle_ocr(self, checked):
+        """Toggle OCR enabled state"""
+        self.ocr_enabled = checked
+        status = "enabled" if checked else "disabled"
+        self.statusBar().showMessage(f"OCR {status} for next save/export")
+
+    def open_ocr_language_dialog(self):
+        """Open dialog to select OCR languages"""
+        from .dialogs.ocr_language_dialog import OCRLanguageDialog
+        
+        dialog = OCRLanguageDialog(
+            self, 
+            available_languages=self.available_ocr_langs,
+            selected_languages=self.selected_ocr_langs
+        )
+        
+        if dialog.exec() == QDialog.Accepted:
+            self.selected_ocr_langs = dialog.get_selected_languages()
+            self.update_ocr_lang_tooltip()
+            
+    def update_ocr_lang_tooltip(self):
+        """Update tooltip to show selected languages"""
+        langs_str = "+".join(self.selected_ocr_langs)
+        self.ocr_lang_btn.setToolTip(f"Selected Languages: {langs_str}")
+        self.statusBar().showMessage(f"OCR Languages set to: {langs_str}")
+
+    def delete_selected_marker(self):
+        """Delete the currently selected marker(s)"""
+        selected_items = self.scene.selectedItems()
+        if not selected_items:
+            return
+            
+        document = self.document_service.get_current_document()
+        if not document:
+            return
+            
+        page = document.get_current_page()
+        if not page:
+            return
+            
+        for item in selected_items:
+            if isinstance(item, ResizableRectItem):
+                # Remove from model
+                page.remove_rectangle(item._entity_id)
+                # Remove from scene
+                self.scene.removeItem(item)
+        
+        self.update_status_bar()
+
+    def change_marker_color(self, color_name):
+        """Update the current fill color and any selected markers"""
+        if color_name in self.color_map:
+            hex_color = self.color_map[color_name]
+            self.fill_color = hex_color
+            
+            # Update selected items if any
+            for item in self.scene.selectedItems():
+                if isinstance(item, ResizableRectItem):
+                    # Update visual item
+                    item.setBrush(QBrush(QColor(hex_color)))
+                    
+                    # Update entity
+                    document = self.document_service.get_current_document()
+                    if document:
+                        page = document.get_current_page()
+                        if page:
+                            rect_entity = page.get_rectangle(item._entity_id)
+                            if rect_entity:
+                                rect_entity.color = hex_color
+
+    def open_document(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Open Document", "", "PDF Files (*.pdf);;All Files (*)"
+        )
         if file_path:
-            # Use threaded document loading with progress dialog
             self._load_document_threaded(file_path)
 
     def _load_document_threaded(self, file_path):
-        """Load document using background thread with enhanced progress dialog"""
-        from ..application.document_loader_worker import DocumentLoaderWorker
-
-        # Create enhanced progress dialog
-        self._load_progress_dialog = QProgressDialog(f"Loading file: {os.path.basename(file_path)}", "Cancel", 0, 100, self)
+        # Create progress dialog
+        self._load_progress_dialog = QProgressDialog("Loading document...", "Cancel", 0, 100, self)
         self._load_progress_dialog.setWindowModality(Qt.WindowModal)
-        self._load_progress_dialog.setWindowTitle(f"Loading: {os.path.basename(file_path)}")
-        self._load_progress_dialog.setMinimumDuration(0)  # Show immediately
+        self._load_progress_dialog.setWindowTitle("Loading")
+        self._load_progress_dialog.setMinimumDuration(0)
         self._load_progress_dialog.setAutoClose(False)
         self._load_progress_dialog.setAutoReset(False)
-        self._load_progress_dialog.setFixedSize(400, 120)  # Fixed size for better appearance
+        self._load_progress_dialog.setFixedSize(400, 120)
 
         # Create worker and thread
         self.loader_thread = QThread()
         self.loader_worker = DocumentLoaderWorker(self.document_service, file_path)
-
-        # Move worker to thread
         self.loader_worker.moveToThread(self.loader_thread)
 
         # Connect signals
         self.loader_thread.started.connect(self.loader_worker.load_document)
         self.loader_worker.progress_update.connect(self._update_load_progress)
-        self.loader_worker.page_loaded.connect(self._on_page_loaded)
+        self.loader_worker.page_loaded.connect(self._on_page_thumbnail_loaded)
         self.loader_worker.finished.connect(self._on_document_loaded)
         self.loader_worker.error.connect(self._on_load_error)
+        
+        # Cleanup
         self.loader_worker.finished.connect(self.loader_thread.quit)
         self.loader_worker.finished.connect(self.loader_worker.deleteLater)
         self.loader_thread.finished.connect(self.loader_thread.deleteLater)
         self._load_progress_dialog.canceled.connect(self.loader_worker.cancel)
 
-        # Clear page list and start loading
+        # Start
         self.page_list.clear()
         self.loader_thread.start()
         self._load_progress_dialog.show()
 
     def _update_load_progress(self, message, percentage):
-        """Update document load progress dialog and status bar"""
         if hasattr(self, '_load_progress_dialog'):
             self._load_progress_dialog.setLabelText(message)
             self._load_progress_dialog.setValue(percentage)
-        # Update status bar with current operation
-        self.statusBar().showMessage(f"Loading: {message}")
+        self.statusBar().showMessage(message)
 
-    def _on_page_loaded(self, thumbnail_image, page_index):
-        """Handle page thumbnail loading"""
-        if thumbnail_image and hasattr(self, '_load_progress_dialog'):
-            qimage = ImageQt(thumbnail_image)
-            pixmap = QPixmap.fromImage(qimage)
-            item = QListWidgetItem(QIcon(pixmap), f"Page {page_index+1}")
+    def _on_page_thumbnail_loaded(self, thumbnail_image, page_index):
+        # Add thumbnail to list widget
+        if thumbnail_image:
+            icon = QIcon(QPixmap.fromImage(ImageQt(thumbnail_image)))
+            item = QListWidgetItem(icon, f"Page {page_index + 1}")
             self.page_list.addItem(item)
 
     def _on_document_loaded(self, document):
-        """Handle document loading completion"""
-        # Close progress dialog
         if hasattr(self, '_load_progress_dialog'):
             self._load_progress_dialog.close()
             delattr(self, '_load_progress_dialog')
-
+        
         if document:
             self.show_page(0)
             self.update_status_bar()
-            # Show loaded file info in status bar
-            self.statusBar().showMessage(
-                f"Loaded: {os.path.basename(document.file_path)} | {document.file_path} | Pages: {len(document.pages)} | Markers: {document.total_rectangles}"
-            )
+            QMessageBox.information(self, "Success", f"Loaded document with {len(document.pages)} pages.")
         else:
-            QMessageBox.critical(self, "Error", "Document loading was cancelled or failed.")
+            # Cancelled or failed silently (error signal handles failure)
+            pass
 
     def _on_load_error(self, error_message):
         """Handle document loading errors"""
@@ -385,12 +644,17 @@ class MainWindow(QMainWindow):
         document = self.document_service.get_current_document()
         if document and 0 <= page_num < document.page_count:
             self.document_service.navigate_to_page(document, page_num)
+            
+            # Reset crop_rect_item reference as scene.clear() will delete it
+            self.crop_rect_item = None
+            
             self.scene.clear()
             page = document.get_current_page()
             if page and page.image:
                 self.scene.clear()
                 qimage = ImageQt(page.image)
                 pixmap = QPixmap.fromImage(qimage)
+                self.scene.setSceneRect(QRectF(pixmap.rect())) # Force scene rect
                 self.scene.addPixmap(pixmap)
                 self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
 
@@ -441,8 +705,6 @@ class MainWindow(QMainWindow):
     def zoom_out(self):
         self.view.scale(0.8, 0.8)
 
-
-
     def delete_all(self):
         """
         Remove all markers from the current page and update the model.
@@ -453,8 +715,6 @@ class MainWindow(QMainWindow):
             if page:
                 self.redaction_service.clear_all_redactions(page)
                 self.show_page(document.current_page_index)
-
-
 
     def save_edited_document(self):
         document = self.document_service.get_current_document()
@@ -492,7 +752,7 @@ class MainWindow(QMainWindow):
         # Create worker and thread
         settings = {
             "ocr_enabled": self.ocr_enabled,
-            "ocr_lang": self.ocr_lang,
+            "ocr_lang": "+".join(self.selected_ocr_langs), # Combine selected languages
             "output_quality": self.output_quality
         }
 
@@ -526,8 +786,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_export_progress_dialog'):
             self._export_progress_dialog.setLabelText(message)
             self._export_progress_dialog.setValue(percentage)
-        # Update status bar with current operation
-        self.statusBar().showMessage(f"Exporting: {message}")
+            # Update status bar with current operation
+            self.statusBar().showMessage(f"Exporting: {message}")
 
     def _on_export_finished(self, success, message, file_path):
         """Handle export completion"""
@@ -568,10 +828,10 @@ class MainWindow(QMainWindow):
 
     def about(self):
         QMessageBox.about(self, "About PyRedactor",
-                          "PyRedactor PDF Redaction Software\n\n"
-                          "Version 0.1.0\n"
-                          "Licensed under GPL V3.0\n\n"
-                          "©2025 Ernedin Zajko <ezajko@root.ba>")
+            "PyRedactor PDF Redaction Software\n\n"
+            "Version 0.1.0\n"
+            "Licensed under GPL V3.0\n\n"
+            "©2025 Ernedin Zajko <ezajko@root.ba>")
 
     def trigger_batch_marker_operation(self, update_func, operation_name="Batch Operation"):
         """
@@ -618,8 +878,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_batch_progress_dialog'):
             self._batch_progress_dialog.setLabelText(message)
             self._batch_progress_dialog.setValue(percentage)
-        # Update status bar with current operation
-        self.statusBar().showMessage(f"Batch Operation: {message}")
+            # Update status bar with current operation
+            self.statusBar().showMessage(f"Batch Operation: {message}")
 
     def _on_batch_finished(self, success, message):
         """Handle batch operation completion"""
@@ -665,10 +925,63 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.critical(self, "Export PDF", message)
 
-        QMessageBox.critical(self, "Export PDF", message)
+    def toggle_enhancement_options(self):
+        """Toggle image enhancement options dialog"""
+        from .dialogs.enhancement_options_dialog import EnhancementOptionsDialog
 
-        event.accept()
+        dialog = EnhancementOptionsDialog(
+            self,
+            enhancement_enabled=self.enhancement_enabled,
+            brightness=self.enhancement_brightness,
+            contrast=self.enhancement_contrast,
+            sharpness=self.enhancement_sharpness,
+            auto_level=self.enhancement_auto_level,
+            deskew=self.enhancement_deskew,
+            denoise=self.enhancement_denoise
+        )
 
+        if dialog.exec() == QDialog.Accepted:
+            values = dialog.get_values()
+            self.enhancement_enabled = values["enhancement_enabled"]
+            self.enhancement_brightness = values["brightness"]
+            self.enhancement_contrast = values["contrast"]
+            self.enhancement_sharpness = values["sharpness"]
+            self.enhancement_auto_level = values["auto_level"]
+            self.enhancement_deskew = values["deskew"]
+            self.enhancement_denoise = values["denoise"]
+
+            # Pass settings to document repository
+            if hasattr(self.document_service, "document_repository"):
+                self.document_service.document_repository.set_enhancement_settings(
+                    enabled=self.enhancement_enabled,
+                    brightness=self.enhancement_brightness,
+                    contrast=self.enhancement_contrast,
+                    sharpness=self.enhancement_sharpness,
+                    auto_level=self.enhancement_auto_level,
+                    deskew=self.enhancement_deskew,
+                    denoise=self.enhancement_denoise
+                )
+
+            # Show status message
+            if self.enhancement_enabled:
+                self.statusBar().showMessage("Image enhancement enabled")
+            else:
+                self.statusBar().showMessage("Image enhancement disabled")
+
+            # Ask to reload if document is open
+            document = self.document_service.get_current_document()
+            if document and document.file_path:
+                reply = QMessageBox.question(
+                    self, 
+                    "Reload Document?",
+                    "Enhancement settings have changed. Do you want to reload the document to apply them?\n\n"
+                    "Note: This will clear current markers.",
+                    QMessageBox.Yes | QMessageBox.No, 
+                    QMessageBox.Yes
+                )
+                
+                if reply == QMessageBox.Yes:
+                    self._load_document_threaded(document.file_path)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
