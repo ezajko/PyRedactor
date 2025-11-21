@@ -54,7 +54,7 @@ class ExportWorker(QObject):
 
                 # Process page with OCR
                 ocr_enabled = self.settings.get("ocr_enabled", True)
-                ocr_lang = self.settings.get("ocr_lang", "eng")
+                ocr_lang = self.settings.get("ocr_language", "eng")
                 quality = self.settings.get("output_quality", "ebook")
 
                 if ocr_enabled:
