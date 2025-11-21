@@ -224,6 +224,7 @@ class CropRectItem(QGraphicsRectItem):
 class PhotoViewer(QGraphicsView):
     def __init__(self, parent):
         super().__init__(parent)
+        self.setBackgroundBrush(QBrush(QColor(220, 220, 220))) # Light gray background
         self.rubberBand = QRubberBand(QRubberBand.Rectangle, self)
         self.setMouseTracking(True)
         self.origin = QPoint()
