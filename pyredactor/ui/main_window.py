@@ -717,6 +717,13 @@ class MainWindow(QMainWindow):
                 pixmap = QPixmap.fromImage(qimage)
                 self.scene.setSceneRect(QRectF(pixmap.rect())) # Force scene rect
                 self.scene.addPixmap(pixmap)
+
+                # Add a border around the page for better visibility on light backgrounds
+                border_rect = QGraphicsRectItem(QRectF(pixmap.rect()))
+                border_rect.setPen(QPen(Qt.black, 1))
+                border_rect.setBrush(Qt.NoBrush)
+                self.scene.addItem(border_rect)
+
                 self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
 
                 for rect_entity in page.rectangles:
